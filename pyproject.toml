@@ -1,0 +1,66 @@
+[project]
+name = "cosilico-py"
+version = "0.0.1"
+description = "Command line tool and Python client for Cosilico"
+authors = [{name = "estorrs", email = "epstorrs@gmail.com"}]
+requires-python = ">= 3.8"
+dependencies = []
+
+[project.optional-dependencies]
+docs = ["griffe-typingdoc==0.2.2"]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["cosilico_py"]
+
+[tool.pixi.project]
+channels = ["conda-forge"]
+platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
+
+[tool.pixi.pypi-dependencies]
+cosilico-py = { path = ".", editable = true }
+
+[tool.pixi.tasks]
+download-bioformats = { cmd="bash scripts/download_bioformats.sh" }
+
+[tool.pixi.dependencies]
+numpy = ">=1.26.4,<1.27"
+scikit-image = ">=0.22.0,<0.23"
+typer = ">=0.12.3,<0.13"
+typing_extensions = ">=4.12.1,<4.13"
+toml = ">=0.10.2,<0.11"
+openjdk = ">=22.0.1,<22.1"
+
+[tool.pixi.feature.docs.tasks]
+serve = { cmd="mkdocs serve" }
+deploy = { cmd="mkdocs gh-deploy --force" }
+
+[tool.pixi.feature.docs.dependencies]
+mkdocs-material = ">=9.5.24,<9.6"
+mkdocs = "1.6.0"
+mkdocstrings-python = "1.10.3"
+pyyaml = ">=5.3.1,<7.0.0"
+pillow = "10.3.0"
+cairosvg = "2.7.0"
+
+[tool.pixi.feature.test.tasks]
+test = { cmd="pytest" }
+
+[tool.pixi.feature.test.dependencies]
+pytest = "8.2.1"
+
+[tool.pixi.environments]
+default = { solve-group = "default" }
+test = { features = ["test"], solve-group = "default" }
+docs = { features = ["docs"], solve-group = "default" }
+
+[project.scripts]
+cosilico = "cosilico_py.main:app"
+
+[tool.pixi.activation]
+# for some reason we have to add the pixi default env manually when we modify $PATH
+# not sure why, but beware in case it causes issues in future
+env = { PATH = "$PWD/.pixi/envs/default/bin:$PATH:$PWD/bioformats/bftools" }

@@ -1,0 +1,100 @@
+site_name: Cosilico
+site_description: A CLI and Python client for Cosilico
+site_url: http://estorrs.github.io/cosilico-py
+theme:
+  name: material
+  palette:
+  - media: '(prefers-color-scheme: light)'
+    scheme: default
+    primary: teal
+    accent: amber
+    toggle:
+      icon: material/lightbulb
+      name: Switch to dark mode
+  - media: '(prefers-color-scheme: dark)'
+    scheme: slate
+    primary: teal
+    accent: amber
+    toggle:
+      icon: material/lightbulb-outline
+      name: Switch to light mode
+  features:
+  - search.suggest
+  - search.highlight
+  - content.tabs.link
+  - navigation.indexes
+  - content.tooltips
+  - navigation.path
+  - content.code.annotate
+  - content.code.copy
+  - content.code.select
+  - navigation.tabs
+  icon:
+    repo: fontawesome/brands/github-alt
+  logo: img/icon-white.svg
+  favicon: img/favicon.png
+  language: en
+repo_name: estorrs/cosilico-py
+repo_url: https://github.com/estorrs/cosilico-py
+edit_uri: ''
+plugins:
+  search: null
+  mkdocstrings:
+    handlers:
+      python:
+        options:
+          extensions:
+          - griffe_typingdoc
+          show_root_heading: true
+          show_if_no_docstring: true
+          inherited_members: true
+          members_order: source
+          separate_signature: true
+          unwrap_annotated: true
+          filters:
+          - '!^_'
+          merge_init_into_class: true
+          docstring_section_style: spacy
+          signature_crossrefs: true
+          show_symbol_type_heading: true
+          show_symbol_type_toc: true
+nav:
+- Skeleton Tool: index.md
+- Tutorial:
+  - tutorial/index.md
+  - Tutorial - User Guide:
+    - tutorial/index.md
+    - tutorial/config.md
+    - tutorial/login.md
+    - tutorial/shoot.md
+    - A nested section:
+      - tutorial/subsection/testa.md
+      - tutorial/subsection/testb.md
+- Reference (Code API):
+  - reference/index.md
+  - reference/bar.md
+  
+markdown_extensions:
+  toc:
+    permalink: true
+  markdown.extensions.codehilite:
+    guess_lang: false
+  admonition: null
+  codehilite: null
+  extra: null
+  pymdownx.superfences:
+    custom_fences:
+    - name: mermaid
+      class: mermaid
+      format: !!python/name:pymdownx.superfences.fence_code_format ''
+  pymdownx.tabbed:
+    alternate_style: true
+  pymdownx.tilde: null
+  attr_list: null
+  md_in_html: null
+extra:
+  social:
+  - icon: fontawesome/brands/github-alt
+    link: https://github.com/estorrs/skeleton-tool
+  - icon: fontawesome/brands/twitter
+    link: https://twitter.com/erik_storrs
