@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "Command line tool and Python client for Cosilico"
 authors = [{name = "estorrs", email = "epstorrs@gmail.com"}]
 requires-python = ">= 3.8"
-dependencies = []
+dependencies = ["pydantic-extra-types"]
 
 [project.optional-dependencies]
 docs = ["griffe-typingdoc==0.2.2"]
@@ -35,6 +35,7 @@ toml = ">=0.10.2,<0.11"
 openjdk = ">=22.0.1,<22.1"
 validators = ">=0.28.3,<0.29"
 supabase = ">=2.5.0,<2.6"
+pint = ">=0.23,<1"
 
 [tool.pixi.feature.docs.tasks]
 serve = { cmd="mkdocs serve" }

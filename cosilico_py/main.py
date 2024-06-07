@@ -22,6 +22,8 @@ config_app = typer.Typer(no_args_is_help=True)
 app.add_typer(config_app, name="config")
 data_app = typer.Typer(no_args_is_help=True)
 app.add_typer(data_app, name="data")
+layer_app = typer.Typer(no_args_is_help=True)
+app.add_typer(layer_app, name="layer")
 
 app_dir = typer.get_app_dir(APP_NAME)
 console = Console()
@@ -188,6 +190,25 @@ def data_download(
     """
     Download data
     """
+    check_logged_in(client)
+
+@layer_app.command('upload')
+def layer_upload(
+
+    ):
+    """
+    Upload layer
+    """
+    check_logged_in(client)
+
+@layer_app.command('download')
+def layer_download(
+
+    ):
+    """
+    Download layer
+    """
+    check_logged_in(client)
 
 @app.command()
 def load(
