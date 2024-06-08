@@ -7,7 +7,7 @@ from pydantic_extra_types.color import Color
 from typing_extensions import Annotated, Self
 import numpy as np
 
-from cosilico_py.data.conversion import to_microns_per_pixel
+from cosilico.data.conversion import to_microns_per_pixel
 
 class DataType(str, Enum):
     multiplex = "multiplex"
@@ -109,4 +109,3 @@ class Layer(BaseModel):
     name: Annotated[str, Field(
         description="Name of layer"
     )]
-    

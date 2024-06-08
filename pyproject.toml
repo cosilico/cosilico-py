@@ -1,5 +1,5 @@
 [project]
-name = "cosilico-py"
+name = "cosilico"
 version = "0.0.1"
 description = "Command line tool and Python client for Cosilico"
 authors = [{name = "estorrs", email = "epstorrs@gmail.com"}]
@@ -14,14 +14,14 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["cosilico_py"]
+packages = ["cosilico"]
 
 [tool.pixi.project]
 channels = ["conda-forge"]
 platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
 
 [tool.pixi.pypi-dependencies]
-cosilico-py = { path = ".", editable = true }
+cosilico = { path = ".", editable = true }
 
 [tool.pixi.tasks]
 download-bioformats = { cmd="bash scripts/download_bioformats.sh" }
@@ -61,7 +61,7 @@ test = { features = ["test"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
 
 [project.scripts]
-cosilico = "cosilico_py.main:app"
+cosilico = "cosilico.main:app"
 
 [tool.pixi.activation]
 # for some reason we have to add the pixi default env manually when we modify $PATH

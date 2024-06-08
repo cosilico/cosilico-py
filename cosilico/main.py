@@ -10,9 +10,9 @@ from rich.table import Table
 from supabase import create_client, Client
 from typing_extensions import Annotated
 
-from cosilico_py.supabase.utils import check_logged_in
-from cosilico_py.supabase.storage import upload_data
-from cosilico_py.data.types import DataType, CompressionType
+from cosilico.supabase.utils import check_logged_in
+from cosilico.supabase.storage import upload_data
+from cosilico.data.types import DataType
 
 APP_NAME = "cosilico"
 DEFAULT_KEY = 'default'
@@ -177,7 +177,7 @@ def data_convert(
     input_filepath: Annotated[Path, typer.Argument(exists=True)],
     output_filepath: Annotated[Path, typer.Argument(writable=True)],
     data_type: Annotated[Union[DataType, None], typer.Option()] = None,
-    compression: Annotated[CompressionType, typer.Option()] = CompressionType.lzw,
+    # compression: Annotated[CompressionType, typer.Option()] = CompressionType.lzw,
     ):
     """
     Convert data
