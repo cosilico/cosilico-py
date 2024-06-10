@@ -1,13 +1,15 @@
 from enum import Enum
 from pathlib import Path
-from typing import Union, List
+from typing import Union, List, Dict
 
+from geojson_pydantic import Feature, FeatureCollection
 from pydantic import BaseModel, Field, FilePath, model_validator
 from pydantic_extra_types.color import Color
 from numpy.typing import NDArray
 from typing_extensions import Annotated, Self
 import numpy as np
 
+from cosilico.data.colors import Colormap
 from cosilico.data.conversion import to_microns_per_pixel
 
 class DataType(str, Enum):
@@ -20,14 +22,11 @@ class PixelDataType(Enum):
     uint8 = np.uint8
     uint16 = np.uint16
     uint32 = np.uint32
-    uint64 = np.uint64
     int8 = np.int8
     int16 = np.int16
     int32 = np.int32
-    int64 = np.int64
     float16 = np.float16
     float32 = np.float32
-    float64 = np.float64
 
 class ScalingMethod(str, Enum):
     min_max = 'min_max'
@@ -41,9 +40,6 @@ class ChannelViewSettings(BaseModel):
     """
     View settings for a channel.
     """
-    name: Annotated[str, Field(
-        description="Name of channel."
-    )]
     min_value: Annotated[float, Field(
         description="Minimum value of channel."
     )] = 0.
@@ -144,10 +140,9 @@ class MultiplexImage(BaseModel):
         if self.view_settings is None:
             self.view_settings = MultiplexViewSettings(
                 channel_views=[ChannelViewSettings(
-                    name=name,
                     min_value=np.iinfo(self.data_type.value).min,
                     max_value=np.iinfo(self.data_type.value).max
-                ) for name in self.channels]
+                ) for _ in self.channels]
             )
         return self
 
@@ -156,27 +151,111 @@ class MultiplexImage(BaseModel):
 
 
 
-class LayerObjectType(str, Enum):
-    point = "point"
-    polygon = "polygon"
+## Layer stuff
 
-class LayerValueType(str, Enum):
-    text = "text"
-    categorical = "categorical"
-    continuous = "continuous"
+class RangeType(str, Enum):
+    zero_max = 'zero_max'
+    min_max = 'min_max'
+    symmetrical = 'symmetrical'
+
+class PointShape(str, Enum):
+    circle = "circle"
+
+class GeometryViewSettings(BaseModel):
+    """
+    Default view settings applied to Point, MultiPoint, LineString, MultiLineString, Polygon and MultiPolygon geometries.
+    """
+    fill_color: Annotated[Color, Field(
+        description="Default fill color. Polygons will be this color if no properties are provided. Can be HEX, RGB, RGBA, or a [CSS Color Module Level 3](http://www.w3.org/TR/css3-color/#svg-color) string."
+    )] = 'lightgray'
+    fill_alpha: Annotated[float, Field(
+        description="Fill alpha.",
+        ge=0.,
+        le=1.
+    )] = 1.
+    border_color: Annotated[Color, Field(
+        description="Default border color. Can be HEX, RGB, RGBA, or a [CSS Color Module Level 3](http://www.w3.org/TR/css3-color/#svg-color) string."
+    )] = 'darkgray'
+    border_alpha: Annotated[float, Field(
+        description="Border alpha.",
+        ge=0.,
+        le=1.
+    )] = 1.
+    border_thickness: Annotated[float, Field(
+        description="Border thickness in pixels",
+        ge=0.
+    )]
+
+class LayerViewSettings(BaseModel):
+    """
+    View settings for Layer.
+    """
+    colormap_continuous: Annotated[Colormap, Field(
+        description='Default colormap used for continuous properties.'
+    )] = Colormap.viridis
+    colormap_categorical: Annotated[Colormap, Field(
+        description='Default colormap used for categorical properties.'
+    )] = Colormap.tab10
+    point_shape: Annotated[PointShape, Field(
+        description="Default shape used to render Point and MultiPoint geometries."
+    )]
+    continuous_range_type: Annotated[RangeType, Field(
+        description='What range to use for continuous colormap. Defaults to "min_max"'
+    )] = RangeType.min_max
+    geometry_view_settings: Annotated[GeometryViewSettings, Field(
+        description='Default view settings for layer geometries.'
+    )]
+
+
+class FeatureProperties(BaseModel):
+    """
+    Multi-dimensional feature properties.
+    """
+    property_names: Annotated[List[str], Field(
+        description="Property names. Must be unique across all properties."
+    )]
+    data: Annotated[NDArray, Field(
+        description="Array of multi-dimensional feature properties. Has shape of (n_features, n_properties)."
+    )]
+
+    def validate_property_names(self) -> Self:
+        if len(self.property_names) != self.features_properties.shape[1]:
+            raise ValueError(f'Length of `property_names` was {len(self.property_names)} and number of columns in `feature_properties` was {self.feature_properties.shape[1]}. Length of `property_names` and num columns in `feature_properties` must be equal.')
+        if len(set(self.property_names)) != len(self.property_names):
+            raise ValueError('Values in `property_names` must be unique.')
+        
+        return self
+
 
 class Layer(BaseModel):
     """
-    A image layer
+    A image layer.
     """
     name: Annotated[str, Field(
         description="Name of layer"
     )]
-    object_type: Annotated[LayerObjectType, Field(
-        description="Type of objects in layer."
+    features: Annotated[FeatureCollection, Field(
+        description="Layer features. Must be GeoJSON format."
     )]
-    value_type: Annotated[LayerValueType, Field(
-        description="Value type of objects in layer."
+    feature_ids: Annotated[List[Union[str | int]], Field(
+        description="Feature IDs. Must be unique across all features."
     )]
+    group_to_feature_properties: Annotated[Union[Dict[str, FeatureProperties] | None], Field(
+        description="Multi-dimensional feature properties. A mapping where the keys describe a group of properties (for example, 'gene expression') are mapped to FeatureProperties that represent properties associated with the group (for example, genes)."
+    )]
+    view_settings: Annotated[Union[LayerViewSettings | None], Field(
+        description="View settings for Layer. If not defined, will be automatically generated."
+    )] = LayerViewSettings()
 
+    @model_validator(mode='after')
+    def validate_feature_properties(self) -> Self:
+        if self.feature_properties is not None:
+            if len(self.feature_ids) != len(self.features):
+                raise ValueError(f'Length of `feature_properties.feature_ids` was {len(self.feature_ids)} and length of `features` was {self.features}. Length of `feature_ids` and `features` must be equal.')
+            if len(set(self.feature_ids)) != len(self.feature_ids):
+                raise ValueError('Values in `feature_ids` must be unique.')
+            for feature_property in self.group_to_feature_properties.values():
+                if len(self.feature_ids) != feature_property.data.shape[0]:
+                    raise ValueError(f'Length of `feature_ids` was {len(self.feature_ids)} and number of rows in `feature_properties.data` was {feature_property.data.shape[0]}. Length of `feature_ids` and num rows in `feature_properties.data` must be equal.')
 
+        return self
