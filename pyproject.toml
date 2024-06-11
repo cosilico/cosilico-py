@@ -38,6 +38,7 @@ supabase = ">=2.5.0,<2.6"
 pint = ">=0.23,<1"
 geojson-pydantic = ">=1.1.0,<1.2"
 matplotlib = ">=3.8.4,<3.9"
+zarr = ">=2.18.2,<2.19"
 
 [tool.pixi.feature.docs.tasks]
 serve = { cmd="mkdocs serve" }

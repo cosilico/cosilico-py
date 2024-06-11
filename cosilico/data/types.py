@@ -8,6 +8,7 @@ from pydantic_extra_types.color import Color
 from numpy.typing import NDArray
 from typing_extensions import Annotated, Self
 import numpy as np
+import zarr
 
 from cosilico.data.colors import Colormap
 from cosilico.data.conversion import to_microns_per_pixel
@@ -66,7 +67,7 @@ class MultiplexImage(BaseModel):
     channels: Annotated[List[str], Field(
         description="Names of channels in image. Must be ordered."
     )]
-    data: Annotated[NDArray, Field(
+    data: Annotated[Union[zarr.Array | NDArray], Field(
         description="Pixel data for image. Image shape is (n_channels, height, width)."
     )]
     resolution: Annotated[float, Field(
@@ -153,7 +154,7 @@ class MultiplexImage(BaseModel):
 
 ## Layer stuff
 
-class RangeType(str, Enum):
+class RangeScalingMethod(str, Enum):
     zero_max = 'zero_max'
     min_max = 'min_max'
     symmetrical = 'symmetrical'
@@ -184,7 +185,25 @@ class GeometryViewSettings(BaseModel):
     border_thickness: Annotated[float, Field(
         description="Border thickness in pixels",
         ge=0.
+    )] = 1.
+    point_shape: Annotated[PointShape, Field(
+        description="Default shape used to render Point and MultiPoint geometries."
+    )] = PointShape.circle
+
+class PropertyViewSettings(BaseModel):
+    """
+    View settings for a property
+    """
+    colormap: Annotated[Colormap, Field(
+        description="Colormap used to display property."
     )]
+    range_scaling_method: Annotated[RangeScalingMethod, Field(
+        description='Range scaling method to use if property values are continuous.'
+    )] = RangeScalingMethod.min_max
+    geometry_view_settings: Annotated[GeometryViewSettings, Field(
+        description='Default view settings for layer geometries.'
+    )] = GeometryViewSettings()
+
 
 class LayerViewSettings(BaseModel):
     """
@@ -196,35 +215,51 @@ class LayerViewSettings(BaseModel):
     colormap_categorical: Annotated[Colormap, Field(
         description='Default colormap used for categorical properties.'
     )] = Colormap.tab10
-    point_shape: Annotated[PointShape, Field(
-        description="Default shape used to render Point and MultiPoint geometries."
-    )]
-    continuous_range_type: Annotated[RangeType, Field(
-        description='What range to use for continuous colormap. Defaults to "min_max"'
-    )] = RangeType.min_max
+    range_scaling_method: Annotated[RangeScalingMethod, Field(
+        description='What range scaling method to use for continuous colormap.'
+    )] = RangeScalingMethod.min_max
     geometry_view_settings: Annotated[GeometryViewSettings, Field(
         description='Default view settings for layer geometries.'
-    )]
+    )] = GeometryViewSettings()
 
 
-class FeatureProperties(BaseModel):
-    """
-    Multi-dimensional feature properties.
-    """
-    property_names: Annotated[List[str], Field(
-        description="Property names. Must be unique across all properties."
-    )]
-    data: Annotated[NDArray, Field(
-        description="Array of multi-dimensional feature properties. Has shape of (n_features, n_properties)."
-    )]
+# class FeatureProperties(BaseModel):
+#     """
+#     Multi-dimensional feature properties.
+#     """
+#     property_names: Annotated[List[str], Field(
+#         description="Property names. Must be unique across all properties and ordered to match the columns in `data`."
+#     )]
+#     data: Annotated[zarr.Array, Field(
+#         description="Zarr array of multi-dimensional feature properties. Has shape of (n_features, n_properties)."
+#     )]
+#     name_to_view_settings: Annotated[Union[Dict[str, PropertyViewSettings] | None], Field(
+#         description="A mapping linking a property name to view settings that should overwrite default view settings specified by the Layer."
+#     )] = None
+#     name_to_categories: Annotated[Union[Dict[str, List[str]] | None], Field(
+#         description="A mapping linking a property name to the ordered categories of a given property. Can be used to specify defaults display order. If not provided for a categorical property, is automatically generated."
+#     )] = None
 
-    def validate_property_names(self) -> Self:
-        if len(self.property_names) != self.features_properties.shape[1]:
-            raise ValueError(f'Length of `property_names` was {len(self.property_names)} and number of columns in `feature_properties` was {self.feature_properties.shape[1]}. Length of `property_names` and num columns in `feature_properties` must be equal.')
-        if len(set(self.property_names)) != len(self.property_names):
-            raise ValueError('Values in `property_names` must be unique.')
+#     @model_validator(mode='after')
+#     def validate_property_names(self) -> Self:
+#         if len(self.property_names) != self.data.shape[1]:
+#             raise ValueError(f'Length of `property_names` was {len(self.property_names)} and number of columns in `data` was {self.data.shape[1]}. Length of `property_names` and num columns in `data` must be equal.')
+#         if len(set(self.property_names)) != len(self.property_names):
+#             raise ValueError('Values in `property_names` must be unique.')
+#         if self.name_to_view_settings is not None:
+#             for name in self.name_to_view_settings.keys():
+#                 if name not in self.property_names:
+#                     raise ValueError(f'Property name {name} is in `name_to_view_settings`, but not `property_names`.')
         
-        return self
+#         return self
+
+#     @model_validator(mode='after')
+#     def populate_name_to_categories(self) -> Self:
+#         if self.name_to_categories is None:
+#             self.name_to_categories = {}
+#         for i, name in enumerate(self.property_names):
+
+#         return self
 
 
 class Layer(BaseModel):
@@ -240,22 +275,61 @@ class Layer(BaseModel):
     feature_ids: Annotated[List[Union[str | int]], Field(
         description="Feature IDs. Must be unique across all features."
     )]
-    group_to_feature_properties: Annotated[Union[Dict[str, FeatureProperties] | None], Field(
-        description="Multi-dimensional feature properties. A mapping where the keys describe a group of properties (for example, 'gene expression') are mapped to FeatureProperties that represent properties associated with the group (for example, genes)."
-    )]
+    name_to_feature_properties: Annotated[Union[Dict[str, zarr.Group] | None], Field(
+        description="""
+        A mapping where names (keys) are mapped to multi-dimensional feature properties (values) that are represented as a Zarr hierarchy group.
+
+        Use `XXXX.xx` to ensure the correct structure of feature properties.
+
+        Feature properties must have the following structure:
+        /
+        └── group1 
+            ├── data (n_features, n_properties) dtype
+            └── names (n_properties,) str
+            └── categories - is only present if data is categorical
+                └──  name1 (n_categories,) dtype
+                └──  name2 (n_categories,) dtype
+                └──  name3 (n_categories,) dtype
+                ...
+                └──  namez (n_categories,) dtype
+        └── group2
+            ├── data (n_features, n_properties) dtype
+            └── names (n_properties,) str
+            └── categories - is only present if data is categorical
+                └──  name1 (n_categories,) dtype
+                └──  name2 (n_categories,) dtype
+                └──  name3 (n_categories,) dtype
+                ...
+                └──  namez (n_categories,) dtype
+        ....
+        """
+    )] = None
     view_settings: Annotated[Union[LayerViewSettings | None], Field(
         description="View settings for Layer. If not defined, will be automatically generated."
     )] = LayerViewSettings()
 
     @model_validator(mode='after')
-    def validate_feature_properties(self) -> Self:
+    def validate_features(self) -> Self:
         if self.feature_properties is not None:
             if len(self.feature_ids) != len(self.features):
                 raise ValueError(f'Length of `feature_properties.feature_ids` was {len(self.feature_ids)} and length of `features` was {self.features}. Length of `feature_ids` and `features` must be equal.')
             if len(set(self.feature_ids)) != len(self.feature_ids):
                 raise ValueError('Values in `feature_ids` must be unique.')
-            for feature_property in self.group_to_feature_properties.values():
-                if len(self.feature_ids) != feature_property.data.shape[0]:
-                    raise ValueError(f'Length of `feature_ids` was {len(self.feature_ids)} and number of rows in `feature_properties.data` was {feature_property.data.shape[0]}. Length of `feature_ids` and num rows in `feature_properties.data` must be equal.')
 
+        return self
+    
+    def validate_feature_properties(self) -> Self:
+        if self.name_to_feature_properties is None:
+            return self
+
+        for name, prop in self.name_to_feature_properties.items():
+            missing = [x for x in ['data', 'names'] if x not in prop.group_keys()]
+            if missing:
+                raise ValueError(f'{missing} were missing from {name}. Make sure feature property Zarr is properly formatted according to XXX.xx')
+
+            
+
+        for feature_property in self.group_to_feature_properties.values():
+            if len(self.feature_ids) != feature_property.data.shape[0]:
+                raise ValueError(f'Length of `feature_ids` was {len(self.feature_ids)} and number of rows in `feature_properties.data` was {feature_property.data.shape[0]}. Length of `feature_ids` and num rows in `feature_properties.data` must be equal.')
         return self
