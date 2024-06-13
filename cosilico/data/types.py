@@ -6,12 +6,14 @@ from geojson_pydantic import Feature, FeatureCollection
 from pydantic import BaseModel, Field, FilePath, model_validator
 from pydantic_extra_types.color import Color
 from numpy.typing import NDArray
+from scipy.sparse import spmatrix
 from typing_extensions import Annotated, Self
 import numpy as np
 import zarr
 
 from cosilico.data.colors import Colormap
-from cosilico.data.conversion import to_microns_per_pixel
+from cosilico.data.conversion import to_microns_per_pixel, scale_data, convert_dtype
+from cosilico.data.zarr import to_zarr
 
 class DataType(str, Enum):
     multiplex = "multiplex"
@@ -111,30 +113,7 @@ class MultiplexImage(BaseModel):
     
     @model_validator(mode='after')
     def convert_data_type(self) -> Self:
-        if self.data_type is None:
-            self.data_type = PixelDataType(self.data.dtype)
-        elif all(
-            self.data_type is not None,
-            self.data_type.value != self.data.dtype,
-            ):
-            if self.scaling_method.value == 'min_max':
-                min_value, max_value = self.data.min(), self.data.max()
-            elif self.scaling_method.value == 'mindtype_maxdtype':
-                min_value, max_value = np.iinfo(self.data_type.value).min, np.iinfo(self.data_type.value).max
-            elif self.scaling_method.value == 'zero_max':
-                min_value, max_value = 0, self.data.max()
-            elif self.scaling_method.value == 'zero_maxdtype':
-                min_value, max_value = 0, np.iinfo(self.data_type.value).max
-            elif self.scaling_method.value == 'min_maxdtype':
-                min_value, max_value = self.data.min(), np.iinfo(self.data_type.value).max
-  
-            if self.scaling_method.value != 'no_scale':
-                self.data = self.data - min_value
-                self.data = self.data / max_value
-
-            self.data = self.data.astype(self.data_type.value)
-
-        return self
+        return convert_dtype(self)
     
     @model_validator(mode='after')
     def generate_view_settings(self) -> Self:
@@ -190,20 +169,6 @@ class GeometryViewSettings(BaseModel):
         description="Default shape used to render Point and MultiPoint geometries."
     )] = PointShape.circle
 
-class PropertyViewSettings(BaseModel):
-    """
-    View settings for a property
-    """
-    colormap: Annotated[Colormap, Field(
-        description="Colormap used to display property."
-    )]
-    range_scaling_method: Annotated[RangeScalingMethod, Field(
-        description='Range scaling method to use if property values are continuous.'
-    )] = RangeScalingMethod.min_max
-    geometry_view_settings: Annotated[GeometryViewSettings, Field(
-        description='Default view settings for layer geometries.'
-    )] = GeometryViewSettings()
-
 
 class LayerViewSettings(BaseModel):
     """
@@ -223,43 +188,67 @@ class LayerViewSettings(BaseModel):
     )] = GeometryViewSettings()
 
 
-# class FeatureProperties(BaseModel):
-#     """
-#     Multi-dimensional feature properties.
-#     """
-#     property_names: Annotated[List[str], Field(
-#         description="Property names. Must be unique across all properties and ordered to match the columns in `data`."
-#     )]
-#     data: Annotated[zarr.Array, Field(
-#         description="Zarr array of multi-dimensional feature properties. Has shape of (n_features, n_properties)."
-#     )]
-#     name_to_view_settings: Annotated[Union[Dict[str, PropertyViewSettings] | None], Field(
-#         description="A mapping linking a property name to view settings that should overwrite default view settings specified by the Layer."
-#     )] = None
-#     name_to_categories: Annotated[Union[Dict[str, List[str]] | None], Field(
-#         description="A mapping linking a property name to the ordered categories of a given property. Can be used to specify defaults display order. If not provided for a categorical property, is automatically generated."
-#     )] = None
+class PropertyGroup(BaseModel):
+    """
+    Group of related properties of the same data type. Must have same data type and be stored in matrix form.
+    """
+    properties: Annotated[List[str], Field(
+        description='Names of properties in property group. Are column names in `data`'
+    )]
+    data: Annotated[Union[zarr.Array | NDArray | spmatrix], Field(
+        description='Matrix of shape (num_features, num_properties).'
+    )]
+    data_type: Annotated[Union[PixelDataType | None], Field(
+        description='Data type to store `data` as. If not specified, will match data type of `data`. If specified and different from `data` data type then `data` will be transformed to the given data type with the specified `scaling_method`.'
+    )] = None
+    scaling_method: Annotated[ScalingMethod, Field(
+        description="How to scale data if data type conversion is required. Only applicable if `data_type` is different from `data` data type."
+    )] = ScalingMethod.min_max
 
-#     @model_validator(mode='after')
-#     def validate_property_names(self) -> Self:
-#         if len(self.property_names) != self.data.shape[1]:
-#             raise ValueError(f'Length of `property_names` was {len(self.property_names)} and number of columns in `data` was {self.data.shape[1]}. Length of `property_names` and num columns in `data` must be equal.')
-#         if len(set(self.property_names)) != len(self.property_names):
-#             raise ValueError('Values in `property_names` must be unique.')
-#         if self.name_to_view_settings is not None:
-#             for name in self.name_to_view_settings.keys():
-#                 if name not in self.property_names:
-#                     raise ValueError(f'Property name {name} is in `name_to_view_settings`, but not `property_names`.')
+    @model_validator(mode='after')
+    def data_to_zarr(self) -> Self:
+        if not isinstance(self.data, zarr.Array):
+            self.data = to_zarr(self.data)
+
+        if len(set(self.properties)) != len(self.properties):
+            raise ValueError('All property names must be unique.')
         
-#         return self
+        if len(self.properties) != self.data.shape[1]:
+            raise ValueError(f'Length of `properties` (got {len(self.property_names)}) must be equal to column dimension of `data` (got {self.data.shape[1]})')
 
-#     @model_validator(mode='after')
-#     def populate_name_to_categories(self) -> Self:
-#         if self.name_to_categories is None:
-#             self.name_to_categories = {}
-#         for i, name in enumerate(self.property_names):
+        self.data.attrs['properties'] = self.properties
 
-#         return self
+        return self
+
+    @model_validator(mode='after')
+    def convert_data_type(self) -> Self:
+        return convert_dtype(self)
+
+
+class Property(BaseModel):
+    """
+    A property of layer features.
+    """
+    data: Annotated[Union[zarr.Array | NDArray], Field(
+        description='1D array of length num_features. Order must match order of features in Layer.'
+    )]
+    data_type: Annotated[Union[PixelDataType | None], Field(
+        description='Data type to store `data` as. If not specified, will match data type of `data`. If specified and different from `data` data type then `data` will be transformed to the given data type with the specified `scaling_method`.'
+    )] = None
+    scaling_method: Annotated[ScalingMethod, Field(
+        description="How to scale data if data type conversion is required. Only applicable if `data_type` is different from `data` data type."
+    )] = ScalingMethod.min_max
+
+    @model_validator(mode='after')
+    def data_to_zarr(self) -> Self:
+        if not isinstance(self.data, zarr.Array):
+            self.data = to_zarr(self.data)
+
+        return self
+
+    @model_validator(mode='after')
+    def convert_data_type(self) -> Self:
+        return convert_dtype(self)
 
 
 class Layer(BaseModel):
@@ -275,35 +264,6 @@ class Layer(BaseModel):
     feature_ids: Annotated[List[Union[str | int]], Field(
         description="Feature IDs. Must be unique across all features."
     )]
-    name_to_feature_properties: Annotated[Union[Dict[str, zarr.Group] | None], Field(
-        description="""
-        A mapping where names (keys) are mapped to multi-dimensional feature properties (values) that are represented as a Zarr hierarchy group.
-
-        Use `XXXX.xx` to ensure the correct structure of feature properties.
-
-        Feature properties must have the following structure:
-        /
-        └── group1 
-            ├── data (n_features, n_properties) dtype
-            └── names (n_properties,) str
-            └── categories - is only present if data is categorical
-                └──  name1 (n_categories,) dtype
-                └──  name2 (n_categories,) dtype
-                └──  name3 (n_categories,) dtype
-                ...
-                └──  namez (n_categories,) dtype
-        └── group2
-            ├── data (n_features, n_properties) dtype
-            └── names (n_properties,) str
-            └── categories - is only present if data is categorical
-                └──  name1 (n_categories,) dtype
-                └──  name2 (n_categories,) dtype
-                └──  name3 (n_categories,) dtype
-                ...
-                └──  namez (n_categories,) dtype
-        ....
-        """
-    )] = None
     view_settings: Annotated[Union[LayerViewSettings | None], Field(
         description="View settings for Layer. If not defined, will be automatically generated."
     )] = LayerViewSettings()
