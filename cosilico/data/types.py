@@ -1,6 +1,6 @@
 from enum import Enum
 from pathlib import Path
-from typing import Union, List, Dict
+from typing import Union, List, Dict, Iterable
 
 from geojson_pydantic import Feature, FeatureCollection
 from pydantic import BaseModel, Field, FilePath, model_validator
@@ -9,6 +9,7 @@ from numpy.typing import NDArray
 from scipy.sparse import spmatrix
 from typing_extensions import Annotated, Self
 import numpy as np
+import pandas as pd
 import zarr
 
 from cosilico.data.colors import Colormap
@@ -187,68 +188,101 @@ class LayerViewSettings(BaseModel):
         description='Default view settings for layer geometries.'
     )] = GeometryViewSettings()
 
-
-class PropertyGroup(BaseModel):
-    """
-    Group of related properties of the same data type. Must have same data type and be stored in matrix form.
-    """
-    properties: Annotated[List[str], Field(
-        description='Names of properties in property group. Are column names in `data`'
-    )]
-    data: Annotated[Union[zarr.Array | NDArray | spmatrix], Field(
-        description='Matrix of shape (num_features, num_properties).'
-    )]
-    data_type: Annotated[Union[PixelDataType | None], Field(
-        description='Data type to store `data` as. If not specified, will match data type of `data`. If specified and different from `data` data type then `data` will be transformed to the given data type with the specified `scaling_method`.'
-    )] = None
-    scaling_method: Annotated[ScalingMethod, Field(
-        description="How to scale data if data type conversion is required. Only applicable if `data_type` is different from `data` data type."
-    )] = ScalingMethod.min_max
-
-    @model_validator(mode='after')
-    def data_to_zarr(self) -> Self:
-        if not isinstance(self.data, zarr.Array):
-            self.data = to_zarr(self.data)
-
-        if len(set(self.properties)) != len(self.properties):
-            raise ValueError('All property names must be unique.')
-        
-        if len(self.properties) != self.data.shape[1]:
-            raise ValueError(f'Length of `properties` (got {len(self.property_names)}) must be equal to column dimension of `data` (got {self.data.shape[1]})')
-
-        self.data.attrs['properties'] = self.properties
-
-        return self
-
-    @model_validator(mode='after')
-    def convert_data_type(self) -> Self:
-        return convert_dtype(self)
-
-
 class Property(BaseModel):
     """
     A property of layer features.
     """
-    data: Annotated[Union[zarr.Array | NDArray], Field(
+    data: Annotated[Union[zarr.Array | NDArray | pd.Series], Field(
         description='1D array of length num_features. Order must match order of features in Layer.'
     )]
+    feature_ids: Annotated[Union[Iterable | None], Field(
+        description='Layer feature IDs properties correspond to. Must match order of rows in `data`.'
+    )] = None
     data_type: Annotated[Union[PixelDataType | None], Field(
         description='Data type to store `data` as. If not specified, will match data type of `data`. If specified and different from `data` data type then `data` will be transformed to the given data type with the specified `scaling_method`.'
     )] = None
     scaling_method: Annotated[ScalingMethod, Field(
         description="How to scale data if data type conversion is required. Only applicable if `data_type` is different from `data` data type."
     )] = ScalingMethod.min_max
+    force_scale: Annotated[bool, Field(
+        description='Force data to scale based on scaling_method, even if data_type and data.dtype match.'
+    )] = False
+
+    @model_validator(mode='after')
+    def process_feature_ids(self) -> Self:
+        if self.feature_ids is None:
+            if any(
+                isinstance(self.data, pd.Series),
+                isinstance(self.data, pd.DataFrame)
+                ):
+                self.feature_ids = self.data.index.to_list()
+            else:
+                raise ValueError(f'feature_ids is not provided and data is of type {type(self.data)}. Unless data is a pd.Series, feature_ids must be provided.')
+
+        if len(set(self.feature_ids)) != len(self.feature_ids):
+            raise ValueError('All feature ids must be unique.')
+
+        if len(self.feature_ids) != self.data.shape[0]:
+            raise ValueError(f'Length of `feature_ids` (got {len(self.feature_ids)}) must be equal to row dimension of `data` (got {self.data.shape[0]})')
+
+        return self
+
+    @model_validator(mode='after')
+    def data_to_zarr(self) -> Self:
+        if len(self.data.shape > 1):
+            raise ValueError(f'data must be 1D array. Got array with shape {self.data.shape}.')
+        if not isinstance(self.data, zarr.Array):
+            self.data = to_zarr(self.data)
+        
+        self.data['feature_ids'] = self.feature_ids
+
+        return self
+
+    @model_validator(mode='after')
+    def convert_data_type(self) -> Self:
+        return convert_dtype(self, scale=self.force_scale)
+
+
+class PropertyGroup(Property):
+    """
+    Group of related properties of the same data type. Must have same data type and be stored in matrix form.
+    """
+    data: Annotated[Union[zarr.Array | NDArray | spmatrix], Field(
+        description='Matrix of shape (num_features, num_properties).'
+    )]
+    property_names: Annotated[Union[Iterable[str] | None], Field(
+        description='Names of properties in property group. Are the column names in `data`'
+    )] = None
+
+    @model_validator(mode='after')
+    def process_property_names(self) -> Self:
+        if self.property_names is None:
+            if isinstance(self.data, pd.DataFrame):
+                self.property_names = list(self.data.columns)
+            else:
+                raise ValueError(f'property_names is not provided and data is of type {type(self.data)}. Unless data is a pd.DataFrame, property_names must be provided.')
+
+        if len(set(self.property_names)) != len(self.property_names):
+            raise ValueError('All property names must be unique.')
+        
+        if len(self.property_names) != self.data.shape[1]:
+            raise ValueError(f'Length of `property_names` (got {len(self.property_names)}) must be equal to column dimension of `data` (got {self.data.shape[1]})')
+
+        return self
 
     @model_validator(mode='after')
     def data_to_zarr(self) -> Self:
         if not isinstance(self.data, zarr.Array):
             self.data = to_zarr(self.data)
 
-        return self
+        self.data.attrs['property_names'] = self.property_names
+        self.data.attrs['feature_ids'] = self.feature_ids
 
+        return self
+    
     @model_validator(mode='after')
     def convert_data_type(self) -> Self:
-        return convert_dtype(self)
+        return convert_dtype(self, scale=self.force_scale, axis=0)
 
 
 class Layer(BaseModel):
@@ -258,8 +292,16 @@ class Layer(BaseModel):
     name: Annotated[str, Field(
         description="Name of layer"
     )]
-    features: Annotated[FeatureCollection, Field(
-        description="Layer features. Must be GeoJSON format."
+    features: Annotated[zarr.Array, Field(
+        description="""
+                    Layer features. Must be Zarr Array.
+
+                    geometry must be specified as attribute. Valid geometries are point, multipoint, line, multiline, polygon, and multipolgon
+
+                    i.e. array['attrs']['geometry'] = 'point'
+
+                    Shape of array will change based on geometry. See XX.xx for specifications.
+                    """
     )]
     feature_ids: Annotated[List[Union[str | int]], Field(
         description="Feature IDs. Must be unique across all features."
@@ -270,26 +312,9 @@ class Layer(BaseModel):
 
     @model_validator(mode='after')
     def validate_features(self) -> Self:
-        if self.feature_properties is not None:
-            if len(self.feature_ids) != len(self.features):
-                raise ValueError(f'Length of `feature_properties.feature_ids` was {len(self.feature_ids)} and length of `features` was {self.features}. Length of `feature_ids` and `features` must be equal.')
-            if len(set(self.feature_ids)) != len(self.feature_ids):
-                raise ValueError('Values in `feature_ids` must be unique.')
+        if len(self.feature_ids) != self.features.shape[0]:
+            raise ValueError(f'Length of `feature_ids` was {len(self.feature_ids)} and row dimension of `features` was {self.features.shape[0]}. Length of `feature_ids` and `features` row dimension must be equal.')
+        if len(set(self.feature_ids)) != len(self.feature_ids):
+            raise ValueError('Values in `feature_ids` must be unique.')
 
-        return self
-    
-    def validate_feature_properties(self) -> Self:
-        if self.name_to_feature_properties is None:
-            return self
-
-        for name, prop in self.name_to_feature_properties.items():
-            missing = [x for x in ['data', 'names'] if x not in prop.group_keys()]
-            if missing:
-                raise ValueError(f'{missing} were missing from {name}. Make sure feature property Zarr is properly formatted according to XXX.xx')
-
-            
-
-        for feature_property in self.group_to_feature_properties.values():
-            if len(self.feature_ids) != feature_property.data.shape[0]:
-                raise ValueError(f'Length of `feature_ids` was {len(self.feature_ids)} and number of rows in `feature_properties.data` was {feature_property.data.shape[0]}. Length of `feature_ids` and num rows in `feature_properties.data` must be equal.')
         return self
