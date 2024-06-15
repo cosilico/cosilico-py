@@ -5,9 +5,10 @@ bfconvert documentation: https://bio-formats.readthedocs.io/en/stable/users/coml
 """
 from pathlib import Path
 from typing import Union
-from typing_extensions import Annotated, Doc
 import os
 import re
+
+from typing_extensions import Annotated, Doc
 
 from cosilico.data.wrappers.external import realtime_subprocess
 
