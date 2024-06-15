@@ -1,6 +1,11 @@
-# bioformats
-bioformats/
+# external tools
+extras/
 
+# test datasets
+test_datasets/
+
+# test notebooks
+notebooks/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

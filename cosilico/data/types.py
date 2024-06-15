@@ -16,11 +16,6 @@ from cosilico.data.colors import Colormap
 from cosilico.data.conversion import to_microns_per_pixel, scale_data, convert_dtype
 from cosilico.data.zarr import to_zarr
 
-class DataType(str, Enum):
-    multiplex = "multiplex"
-    he = "he"
-    xenium = "xenium"
-    visium = "visium"
 
 class PixelDataType(Enum):
     uint8 = np.uint8
@@ -92,11 +87,20 @@ class MultiplexImage(BaseModel):
     scaling_method: Annotated[ScalingMethod, Field(
         description="How to scale data if data type conversion is required. Only applicable if `data_type` is different from `data` data type."
     )] = ScalingMethod.min_max
+    force_scale: Annotated[bool, Field(
+        description='Force data to scale based on scaling_method, even if data_type and data.dtype match.'
+    )] = False
     microns_per_pixel: Annotated[Union[float | None], Field(
         description="Resolution of image in microns per pixel. If not defined, will be automatically calculated from `resolution` and `resolution_unit`."
     )] = None
     view_settings: Annotated[Union[MultiplexViewSettings | None], Field(
         description="View settings for image. If not defined, will be automatically generated based on `channels`"
+    )] = None
+    id: Annotated[Union[str | int | None], Field(
+        description='Image ID. Not required for initialization. Populated by supabase.'
+    )] = None
+    experiment_id: Annotated[Union[str | int | None], Field(
+        description='Experiment ID image belongs to. Not required for initialization. Populated by supabase.'
     )] = None
 
     @model_validator(mode='after')
@@ -142,6 +146,19 @@ class RangeScalingMethod(str, Enum):
 class PointShape(str, Enum):
     circle = "circle"
 
+class LayerType(str, Enum):
+    platform = 'platform'
+    user = 'user'
+
+class FeatureGeometry(str, Enum):
+    point = 'point'
+    line = 'line'
+    polygon = 'polygon'
+    multipoint = 'multipoint'
+    multiline = 'multiline'
+    multipolygon = 'multipolygon'
+    geojson = 'geojson'
+
 class GeometryViewSettings(BaseModel):
     """
     Default view settings applied to Point, MultiPoint, LineString, MultiLineString, Polygon and MultiPolygon geometries.
@@ -171,9 +188,9 @@ class GeometryViewSettings(BaseModel):
     )] = PointShape.circle
 
 
-class LayerViewSettings(BaseModel):
+class PropertyViewSettings(BaseModel):
     """
-    View settings for Layer.
+    View settings for a Layer property.
     """
     colormap_continuous: Annotated[Colormap, Field(
         description='Default colormap used for continuous properties.'
@@ -192,10 +209,13 @@ class Property(BaseModel):
     """
     A property of layer features.
     """
+    name: Annotated[str, Field(
+        description='Name of property.'
+    )]
     data: Annotated[Union[zarr.Array | NDArray | pd.Series], Field(
         description='1D array of length num_features. Order must match order of features in Layer.'
     )]
-    feature_ids: Annotated[Union[Iterable | None], Field(
+    feature_ids: Annotated[Union[Iterable[Union[str | int]] | None], Field(
         description='Layer feature IDs properties correspond to. Must match order of rows in `data`.'
     )] = None
     data_type: Annotated[Union[PixelDataType | None], Field(
@@ -207,6 +227,15 @@ class Property(BaseModel):
     force_scale: Annotated[bool, Field(
         description='Force data to scale based on scaling_method, even if data_type and data.dtype match.'
     )] = False
+    view_settings: Annotated[Union[PropertyViewSettings | None], Field(
+        description="View settings for a Layer property. If not provided, will be displayed with default view settings for Layer."
+    )] = None
+    id: Annotated[Union[str | int | None], Field(
+        description='Property ID. Not required for initialization. Populated by supabase.'
+    )] = None
+    layer_id: Annotated[Union[str | int | None], Field(
+        description='Layer ID property is linked to. Not required for initialization. Populated by supabase.'
+    )] = None
 
     @model_validator(mode='after')
     def process_feature_ids(self) -> Self:
@@ -225,16 +254,17 @@ class Property(BaseModel):
         if len(self.feature_ids) != self.data.shape[0]:
             raise ValueError(f'Length of `feature_ids` (got {len(self.feature_ids)}) must be equal to row dimension of `data` (got {self.data.shape[0]})')
 
+        if not isinstance(self.feature_ids, list):
+            self.feature_ids = list(self.feature_ids)
+
         return self
 
     @model_validator(mode='after')
     def data_to_zarr(self) -> Self:
-        if len(self.data.shape > 1):
+        if len(self.data.shape) > 1:
             raise ValueError(f'data must be 1D array. Got array with shape {self.data.shape}.')
         if not isinstance(self.data, zarr.Array):
             self.data = to_zarr(self.data)
-        
-        self.data['feature_ids'] = self.feature_ids
 
         return self
 
@@ -252,6 +282,9 @@ class PropertyGroup(Property):
     )]
     property_names: Annotated[Union[Iterable[str] | None], Field(
         description='Names of properties in property group. Are the column names in `data`'
+    )] = None
+    view_settings: Annotated[Dict[str, Union[PropertyViewSettings | None]], Field(
+        description="View settings for a property group. A dictionary mapping property names (keys) to property view settings (values). If not provided, all properties will be displayed with default view settings for Layer. If a dictionary is provided, all properties specified in the dictionary will be displayed with the given view settings, the remaining properties will be visualized with default layer view settings."
     )] = None
 
     @model_validator(mode='after')
@@ -276,13 +309,76 @@ class PropertyGroup(Property):
             self.data = to_zarr(self.data)
 
         self.data.attrs['property_names'] = self.property_names
-        self.data.attrs['feature_ids'] = self.feature_ids
 
         return self
     
     @model_validator(mode='after')
     def convert_data_type(self) -> Self:
         return convert_dtype(self, scale=self.force_scale, axis=0)
+    
+class LayerFeatures(BaseModel):
+    """
+    Feature of a layer.
+    """
+    geometry: Annotated[FeatureGeometry, Field(
+        description='Geometry type of feature contained in layer.'
+    )]
+    feature_ids: Annotated[List[Union[str | int]], Field(
+        description="Feature IDs. Must be unique across all features."
+    )]
+    data: Annotated[Union[zarr.Array | FeatureCollection], Field(
+        description="""
+                    Underlying data describing features.
+
+                    Can be either a Zarr Array or GeoJSON FeatureCollection.
+
+                    A Zarr can be the following shape based on feature geometry type:
+                    + point - (n_features, 2)
+                    + line - (n_features, 2, 2)
+                    + polygon - (n_features, n_max_poly_coords, 2)
+                    + multipoint - (n_features, n_max_objects, 2)
+                    + multiline - (n_features, n_max_objects, 2, 2)
+                    + multipolygon - (n_features, n_max_objects, n_max_poly_coords, 2)
+
+                    n_features - number of features in layer
+                    n_max_objects - maximum number of objects in a multi-geometry
+                    n_max_poly_coords - maximum number of points describing polygon coordinates
+
+                    Coordinates are stored as float32
+
+                    ```python
+                    array.attrs["feature_ids"] = feature_ids
+                    ```
+                    
+                    GeoJSON FeatureCollection should only be used for Layers with a small number of features (i.e. manually drawn annotations, etc.) or it is necessary to have multiple geometry types within the same layer (i.e. mixing points and polygons, etc.). GeoJSON files get large very quickly and should be avoided if a Zarr can be used.
+
+                    """
+    )]
+
+    @model_validator(mode='after')
+    def validate_geometry(self) -> Self:
+        if self.geometry == FeatureGeometry.geojson and not isinstance(self.data, FeatureCollection):
+            raise ValueError('If feature geometry type is GeoJSON, then data must be of type FeatureCollection.')
+
+        return self
+
+
+    @model_validator(mode='after')
+    def validate_features(self) -> Self:
+        if isinstance(self.data, FeatureCollection):
+            n_features = len(self.data.features)
+        else:
+            n_features = self.data.shape[0]
+
+        if len(self.feature_ids) != n_features:
+            raise ValueError(f'Length of `feature_ids` was {len(self.feature_ids)} and `data` was length {n_features}. Length of `feature_ids` and length of `data` must be equal.')
+        if len(set(self.feature_ids)) != len(self.feature_ids):
+            raise ValueError('Values in `feature_ids` must be unique.')
+
+        if self.geometry != FeatureGeometry.geojson:
+            self.data.attrs['feature_ids'] = self.feature_ids
+
+        return self
 
 
 class Layer(BaseModel):
@@ -292,29 +388,52 @@ class Layer(BaseModel):
     name: Annotated[str, Field(
         description="Name of layer"
     )]
-    features: Annotated[zarr.Array, Field(
-        description="""
-                    Layer features. Must be Zarr Array.
-
-                    geometry must be specified as attribute. Valid geometries are point, multipoint, line, multiline, polygon, and multipolgon
-
-                    i.e. array['attrs']['geometry'] = 'point'
-
-                    Shape of array will change based on geometry. See XX.xx for specifications.
-                    """
+    features: Annotated[LayerFeatures, Field(
+        description="Layer features."
     )]
-    feature_ids: Annotated[List[Union[str | int]], Field(
-        description="Feature IDs. Must be unique across all features."
-    )]
-    view_settings: Annotated[Union[LayerViewSettings | None], Field(
-        description="View settings for Layer. If not defined, will be automatically generated."
-    )] = LayerViewSettings()
-
+    properties: Annotated[Union[List[Union[Property | PropertyGroup] | None]], Field(
+        description='Properties associated with layer.'
+    )] = None
+    layer_type: Annotated[LayerType, Field(
+        description='Type of layer. `user` layers are defined by users. `platform` layers are defined by the experimental platform.'
+    )] = LayerType.user
+    view_settings: Annotated[Union[PropertyViewSettings | None], Field(
+        description="Default view settings for properties of the Layer. If not defined, will be automatically generated."
+    )] = PropertyViewSettings()
+    id: Annotated[Union[str | int | None], Field(
+        description='Layer ID. Not required for initialization. Populated by supabase.'
+    )] = None
+    experiment_id: Annotated[Union[str | int | None], Field(
+        description='Experiment ID layer is assigned to. Not required for initialization. Populated by supabase.'
+    )] = None
+    
     @model_validator(mode='after')
-    def validate_features(self) -> Self:
-        if len(self.feature_ids) != self.features.shape[0]:
-            raise ValueError(f'Length of `feature_ids` was {len(self.feature_ids)} and row dimension of `features` was {self.features.shape[0]}. Length of `feature_ids` and `features` row dimension must be equal.')
-        if len(set(self.feature_ids)) != len(self.feature_ids):
-            raise ValueError('Values in `feature_ids` must be unique.')
-
+    def validate_properties(self) -> Self:
+        if self.properties is not None:
+            for prop in self.properties:
+                if prop.feature_ids != self.features.feature_ids:
+                    raise ValueError(f'Feature ids of property must be equal to feature ids of layer. Feature ids of {prop.name} do not match.')
         return self
+
+
+## experiments
+
+class Experiment(BaseModel):
+    name: Annotated[str, Field(
+        description="Name of Experiment."
+    )]
+    platform: Annotated[str, Field(
+        description='Platform used to generate experiment.'
+    )]
+    images: Annotated[Union[List[MultiplexImage] | None], Field(
+        description='Images for experiment.'
+    )]
+    layers: Annotated[Union[List[Layer] | None], Field(
+        description='Layers for experiment.'
+    )]
+    id: Annotated[Union[str | int | None], Field(
+        description='Experiment ID. Not required for initialization. Populated by supabase.'
+    )] = None
+    collection_id: Annotated[Union[str | int | None], Field(
+        description='Collection ID experiment is a member of. Not required for initialization. Populated by supabase.'
+    )] = None

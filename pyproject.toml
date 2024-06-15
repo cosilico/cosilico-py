@@ -8,6 +8,7 @@ dependencies = ["pydantic-extra-types"]
 
 [project.optional-dependencies]
 docs = ["griffe-typingdoc==0.2.2"]
+notebook = ["jupyter"]
 
 [build-system]
 requires = ["setuptools"]
@@ -24,7 +25,7 @@ platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
 cosilico = { path = ".", editable = true }
 
 [tool.pixi.tasks]
-download-bioformats = { cmd="bash scripts/download_bioformats.sh" }
+download-bioformats = { cmd="bash scripts/download_bftools.sh" }
 
 [tool.pixi.dependencies]
 numpy = ">=1.26.4,<1.27"
@@ -55,20 +56,23 @@ pillow = "10.3.0"
 cairosvg = "2.7.0"
 
 [tool.pixi.feature.test.tasks]
+download-datasets = { cmd="bash scripts/download_test_datasets.sh" }
 test = { cmd="pytest" }
 
 [tool.pixi.feature.test.dependencies]
 pytest = "8.2.1"
 
+[tool.pixi.feature.notebook.tasks]
+launch-jupyter = { cmd="jupyter notebook" }
+
 [tool.pixi.environments]
 default = { solve-group = "default" }
 test = { features = ["test"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
+notebook = { features = ["notebook"], solve-group = "default" }
 
 [project.scripts]
 cosilico = "cosilico.main:app"
 
 [tool.pixi.activation]
-# for some reason we have to add the pixi default env manually when we modify $PATH
-# not sure why, but beware in case it causes issues in future
-env = { PATH = "$PWD/.pixi/envs/default/bin:$PATH:$PWD/bioformats/bftools" }
+scripts = [ "scripts/add_external.sh" ]
