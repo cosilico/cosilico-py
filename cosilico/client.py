@@ -58,8 +58,18 @@ class CosilicoClient(object):
                 "password": password
         })
 
-        self._session = data.session
+        self._session = data.sessions
         self._user = data.user
+
+    def add_user(): pass
+    def get_user(): pass
+    def delete_user(): pass
+    def reassign_project(): pass
+    def reassign_collection(): pass
+    def reassign_experiment(): pass
+
+    def get_organization(): pass
+    def list_organization_members(): pass
     
     def add_experiment(): pass
     def add_layer(): pass
@@ -73,10 +83,16 @@ class CosilicoClient(object):
     def delete_layer(): pass
     def delete_image(): pass
     def delete_property(): pass
+    def list_experiments(): pass
+    def list_layers(): pass
+    def list_images(): pass
+    def list_properties(): pass
     def move_experiment(): pass
     
     def add_group(): pass
     def add_group_member(): pass
+    def get_group(): pass
+    def list_group_members(): pass
     def delete_group(): pass
     def delete_group_member(): pass
     
@@ -92,6 +108,8 @@ class CosilicoClient(object):
     def delete_collection(): pass
     def delete_project_member(): pass
     def delete_collection_member(): pass
+    def list_projects(): pass
+    def list_collections(): pass
     def move_collection(): pass
 
     
