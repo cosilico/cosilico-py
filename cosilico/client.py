@@ -61,9 +61,39 @@ class CosilicoClient(object):
         self._session = data.session
         self._user = data.user
     
-    def create_experiment(): pass
+    def add_experiment(): pass
+    def add_layer(): pass
+    def add_image(): pass
+    def add_property(): pass
+    def get_experiment(): pass
+    def get_layer(): pass
+    def get_image(): pass
+    def get_property(): pass
+    def delete_experiment(): pass
+    def delete_layer(): pass
+    def delete_image(): pass
+    def delete_property(): pass
+    def move_experiment(): pass
+    
+    def add_group(): pass
+    def add_group_member(): pass
+    def delete_group(): pass
+    def delete_group_member(): pass
+    
+    def add_project(): pass
+    def add_collection(): pass
+    def add_project_member(): pass
+    def add_collection_member(): pass
+    def get_project(): pass
+    def get_collection(): pass
+    def get_project_members(): pass
+    def get_collection_members(): pass
+    def delete_project(): pass
+    def delete_collection(): pass
+    def delete_project_member(): pass
+    def delete_collection_member(): pass
+    def move_collection(): pass
 
-    def 
     
 
   
