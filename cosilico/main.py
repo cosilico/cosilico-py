@@ -7,12 +7,9 @@ import validators
 from rich import print
 from rich.console import Console
 from rich.table import Table
-from supabase import create_client, Client
 from typing_extensions import Annotated
 
-from cosilico.supabase.utils import check_logged_in
-from cosilico.supabase.storage import upload_data
-from cosilico.data.types import DataType
+from cosilico.client import CosilicoClient
 
 APP_NAME = "cosilico"
 DEFAULT_KEY = 'default'
@@ -27,7 +24,12 @@ app.add_typer(layer_app, name="layer")
 
 app_dir = typer.get_app_dir(APP_NAME)
 console = Console()
-client: Union[Client | None] = None
+client: Union[CosilicoClient | None] = None
+
+def check_client_created():
+    if client is None:
+        print("Must be logged in to use this command. Login with [bold green]cosilico login[/bold green]")
+        raise typer.Exit(code=1)
 
 @app.command()
 def login(
@@ -35,7 +37,7 @@ def login(
     password: Annotated[str, typer.Option()] = '',
     host: Annotated[str, typer.Option()] = '',
     api_key: Annotated[str, typer.Option()] = '',
-    organization: Annotated[str, typer.Option()] = 'default'
+    organization: Annotated[str, typer.Option()] = DEFAULT_KEY
     ):
     """
     Login to Cosilico
@@ -71,7 +73,7 @@ def login(
         api_key = typer.prompt('Enter API key')
 
     # perform login
-    client = create_client(host, api_key)
+    client = CosilicoClient(email, password, host, api_key)
 
     print(f"Logged [bold green]{email}[/bold green] \
 into [bold green]{host}[/bold green] :test_tube:")

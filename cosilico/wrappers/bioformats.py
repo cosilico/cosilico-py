@@ -10,7 +10,7 @@ import re
 
 from typing_extensions import Annotated, Doc
 
-from cosilico.data.wrappers.external import realtime_subprocess
+from cosilico.wrappers.external import realtime_subprocess
 
 def to_ome(
         input_filepath:  Annotated[
