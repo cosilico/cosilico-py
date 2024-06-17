@@ -14,7 +14,8 @@ import zarr
 
 from cosilico.data.colors import Colormap
 from cosilico.data.conversion import to_microns_per_pixel, scale_data, convert_dtype
-from cosilico.data.zarr import to_zarr
+from cosilico.data.platforms import Platform, PlatformName
+from cosilico.data.zarr import to_zarr, delete_if_tmp
 
 
 class PixelDataType(Enum):
@@ -35,7 +36,7 @@ class ScalingMethod(str, Enum):
     mindtype_max_dtype = 'mindtype_maxdtype'
     no_scale = 'no_scale'
 
-class ChannelViewSettings(BaseModel):
+class ChannelViewSettings(BaseModel, validate_assignment=True):
     """
     View settings for a channel.
     """
@@ -49,7 +50,7 @@ class ChannelViewSettings(BaseModel):
         description="Channel color. Can be HEX, RGB, RGBA, or a [CSS Color Module Level 3](http://www.w3.org/TR/css3-color/#svg-color) string."
     )] = "white"
 
-class MultiplexViewSettings(BaseModel):
+class MultiplexViewSettings(BaseModel, validate_assignment=True):
     """
     View settings for a multiplex image.
     """
@@ -58,7 +59,7 @@ class MultiplexViewSettings(BaseModel):
     )]
 
 
-class MultiplexImage(BaseModel):
+class MultiplexImage(BaseModel, validate_assignment=True):
     """
     A multiplex image.
     """
@@ -66,7 +67,7 @@ class MultiplexImage(BaseModel):
         description="Names of channels in image. Must be ordered."
     )]
     data: Annotated[Union[zarr.Array | NDArray], Field(
-        description="Pixel data for image. Image shape is (n_channels, height, width)."
+        description="Pixel data for image. Image shape is (n_channels, height, width).",
     )]
     resolution: Annotated[float, Field(
         description="Resolution of image given in `resolution_unit`s per pixel",
@@ -159,7 +160,7 @@ class FeatureGeometry(str, Enum):
     multipolygon = 'multipolygon'
     geojson = 'geojson'
 
-class GeometryViewSettings(BaseModel):
+class GeometryViewSettings(BaseModel, validate_assignment=True):
     """
     Default view settings applied to Point, MultiPoint, LineString, MultiLineString, Polygon and MultiPolygon geometries.
     """
@@ -188,7 +189,7 @@ class GeometryViewSettings(BaseModel):
     )] = PointShape.circle
 
 
-class PropertyViewSettings(BaseModel):
+class PropertyViewSettings(BaseModel, validate_assignment=True):
     """
     View settings for a Layer property.
     """
@@ -205,7 +206,7 @@ class PropertyViewSettings(BaseModel):
         description='Default view settings for layer geometries.'
     )] = GeometryViewSettings()
 
-class Property(BaseModel):
+class Property(BaseModel, validate_assignment=True):
     """
     A property of layer features.
     """
@@ -240,10 +241,10 @@ class Property(BaseModel):
     @model_validator(mode='after')
     def process_feature_ids(self) -> Self:
         if self.feature_ids is None:
-            if any(
+            if any([
                 isinstance(self.data, pd.Series),
                 isinstance(self.data, pd.DataFrame)
-                ):
+                ]):
                 self.feature_ids = self.data.index.to_list()
             else:
                 raise ValueError(f'feature_ids is not provided and data is of type {type(self.data)}. Unless data is a pd.Series, feature_ids must be provided.')
@@ -271,9 +272,13 @@ class Property(BaseModel):
     @model_validator(mode='after')
     def convert_data_type(self) -> Self:
         return convert_dtype(self, scale=self.force_scale)
+    
+    def __del__(self):
+        if isinstance(self.data, zarr.Array):
+            delete_if_tmp(self.data)
 
 
-class PropertyGroup(Property):
+class PropertyGroup(Property, validate_assignment=True):
     """
     Group of related properties of the same data type. Must have same data type and be stored in matrix form.
     """
@@ -315,8 +320,12 @@ class PropertyGroup(Property):
     @model_validator(mode='after')
     def convert_data_type(self) -> Self:
         return convert_dtype(self, scale=self.force_scale, axis=0)
+
+    def __del__(self):
+        if isinstance(self.data, zarr.Array):
+            delete_if_tmp(self.data)
     
-class LayerFeatures(BaseModel):
+class LayerFeatures(BaseModel, validate_assignment=True):
     """
     Feature of a layer.
     """
@@ -361,7 +370,13 @@ class LayerFeatures(BaseModel):
             raise ValueError('If feature geometry type is GeoJSON, then data must be of type FeatureCollection.')
 
         return self
+    
+    @model_validator(mode='after')
+    def data_to_zarr(self) -> Self:
+        if not isinstance(self.data, zarr.Array) and not isinstance(self.data, FeatureCollection):
+            self.data = to_zarr(self.data)
 
+        return self
 
     @model_validator(mode='after')
     def validate_features(self) -> Self:
@@ -379,9 +394,13 @@ class LayerFeatures(BaseModel):
             self.data.attrs['feature_ids'] = self.feature_ids
 
         return self
+    
+    def __del__(self):
+        if isinstance(self.data, zarr.Array):
+            delete_if_tmp(self.data)
 
 
-class Layer(BaseModel):
+class Layer(BaseModel, validate_assignment=True):
     """
     A image layer.
     """
@@ -418,11 +437,11 @@ class Layer(BaseModel):
 
 ## experiments
 
-class Experiment(BaseModel):
+class Experiment(BaseModel, validate_assignment=True):
     name: Annotated[str, Field(
         description="Name of Experiment."
     )]
-    platform: Annotated[str, Field(
+    platform: Annotated[Platform, Field(
         description='Platform used to generate experiment.'
     )]
     images: Annotated[Union[List[MultiplexImage] | None], Field(

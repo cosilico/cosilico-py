@@ -8,6 +8,7 @@ import toml
 import typer
 
 from cosilico.main import APP_NAME, DEFAULT_KEY
+from cosilico.data.types import Experiment, MultiplexImage, Layer, Property, PropertyGroup
     
 def load_config() -> Union[Dict | None]:
     app_dir = typer.get_app_dir(APP_NAME)
@@ -61,56 +62,102 @@ class CosilicoClient(object):
         self._session = data.sessions
         self._user = data.user
 
-    def add_user(): pass
-    def get_user(): pass
-    def delete_user(): pass
-    def reassign_project(): pass
-    def reassign_collection(): pass
-    def reassign_experiment(): pass
+    def add_user(self):
+        pass
+    def get_user(self):
+        pass
+    def delete_user(self):
+        pass
+    def reassign_project(self):
+        pass
+    def reassign_collection(self):
+        pass
+    def reassign_experiment(self):
+        pass
 
-    def get_organization(): pass
-    def list_organization_members(): pass
+    def get_organization(self):
+        pass
+    def list_organization_members(self):
+        pass
     
-    def add_experiment(): pass
-    def add_layer(): pass
-    def add_image(): pass
-    def add_property(): pass
-    def get_experiment(): pass
-    def get_layer(): pass
-    def get_image(): pass
-    def get_property(): pass
-    def delete_experiment(): pass
-    def delete_layer(): pass
-    def delete_image(): pass
-    def delete_property(): pass
-    def list_experiments(): pass
-    def list_layers(): pass
-    def list_images(): pass
-    def list_properties(): pass
-    def move_experiment(): pass
+    def add_experiment(self):
+        pass
+    def add_layer(self):
+        pass
+    def add_image(self):
+        pass
+    def add_property(self):
+        pass
+    def get_experiment(self):
+        pass
+    def get_layer(self):
+        pass
+    def get_image(self):
+        pass
+    def get_property(self):
+        pass
+    def delete_experiment(self):
+        pass
+    def delete_layer(self):
+        pass
+    def delete_image(self):
+        pass
+    def delete_property(self):
+        pass
+    def list_experiments(self):
+        pass
+    def list_layers(self):
+        pass
+    def list_images(self):
+        pass
+    def list_properties(self):
+        pass
+    def move_experiment(self):
+        pass
     
-    def add_group(): pass
-    def add_group_member(): pass
-    def get_group(): pass
-    def list_group_members(): pass
-    def delete_group(): pass
-    def delete_group_member(): pass
+    def add_group(self):
+        pass
+    def add_group_member(self):
+        pass
+    def get_group(self):
+        pass
+    def list_group_members(self):
+        pass
+    def delete_group(self):
+        pass
+    def delete_group_member(self):
+        pass
     
-    def add_project(): pass
-    def add_collection(): pass
-    def add_project_member(): pass
-    def add_collection_member(): pass
-    def get_project(): pass
-    def get_collection(): pass
-    def get_project_members(): pass
-    def get_collection_members(): pass
-    def delete_project(): pass
-    def delete_collection(): pass
-    def delete_project_member(): pass
-    def delete_collection_member(): pass
-    def list_projects(): pass
-    def list_collections(): pass
-    def move_collection(): pass
+    def add_project(self):
+        pass
+    def add_collection(self):
+        pass
+    def add_project_member(self):
+        pass
+    def add_collection_member(self):
+        pass
+    def get_project(self):
+        pass
+    def get_collection(self):
+        pass
+    def get_project_members(self):
+        pass
+    def get_collection_members(self):
+        pass
+    def delete_project(self):
+        pass
+    def delete_collection(self):
+        pass
+    def delete_project_member(self):
+        pass
+    def delete_collection_member(self):
+        pass
+    def list_projects(self):
+        pass
+    def list_collections(self):
+        pass
+    def move_collection(self):
+        pass
 
     
 

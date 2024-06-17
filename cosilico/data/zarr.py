@@ -1,4 +1,10 @@
+from pathlib import Path
 from typing import Union
+from tempfile import TemporaryDirectory, gettempdir
+from uuid import uuid4
+import os
+import shutil
+
 
 from einops import rearrange
 from numpy.typing import NDArray
@@ -7,16 +13,35 @@ from zarr.storage import StoreLike
 import numpy as np
 import zarr
 
-def initialize_array(
-    data: spmatrix,
-    array: Union[zarr.Array | None] = None,
-    store: Union[StoreLike | None] = None, 
+TMP_PREFIX = 'csctmpzarr_'
+
+def clear_tmp():
+    tmpdir = gettempdir()
+    to_delete = [os.path.join(tmpdir, name) for name in os.listdir(tmpdir)
+                 if name[:len(TMP_PREFIX)] == TMP_PREFIX]
+    for path in to_delete:
+        shutil.rmtree(path)
+
+def delete_if_tmp(
+    x: zarr.Array
     ):
-    if array is None:
-        if store is None:
-            array = zarr.empty_like(data)
-        else:
-            array = zarr.open(store, mode='a', shape=data.shape, dtype=data.dtype)
+    if any([
+        isinstance(x.store, zarr.DirectoryStore),
+        isinstance(x.store, zarr.ZipStore)
+        ]):
+        path = Path(x.store.path)
+        if path.parent.name[:len(TMP_PREFIX)] == TMP_PREFIX:
+            shutil.rmtree(path.parent)
+
+def initialize_array(
+    data: Union[spmatrix, NDArray],
+    store: Union[StoreLike | None] = None, 
+    ) -> zarr.Array:
+    if store is None:
+        directory = TemporaryDirectory(prefix=TMP_PREFIX, delete=False)
+        store = Path(directory.name) / (str(uuid4()) + '.zarr')
+
+    array = zarr.open(store, mode='a', shape=data.shape, dtype=data.dtype)
     return array
 
 def sparse_to_zarr(
@@ -24,7 +49,8 @@ def sparse_to_zarr(
     array: Union[zarr.Array | None] = None,
     store: Union[StoreLike | None] = None,
     ):
-    array = initialize_array(data, array, store)
+    if array is None:
+        array = initialize_array(data, store)
 
     dim_sizes = [dim1 // c1 + 1 for dim1, c1 in zip(array.shape, array.chunks)]
     sizes = np.stack(np.meshgrid(*[np.arange(i) for i in dim_sizes]))
@@ -40,7 +66,8 @@ def numpy_to_zarr(
     array: Union[zarr.Array | None] = None,
     store: Union[StoreLike | None] = None,
     ):
-    array = initialize_array(data, array, store)
+    if array is None:
+        array = initialize_array(data, store)
     array[:] = data
     return array
 
