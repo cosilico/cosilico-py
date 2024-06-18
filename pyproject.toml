@@ -42,6 +42,8 @@ matplotlib = ">=3.8.4,<3.9"
 zarr = ">=2.18.2,<2.19"
 einops = ">=0.8.0,<0.9"
 pandas = ">=2.2.2,<2.3"
+ome-types = ">=0.5.1.post1,<0.5.2"
+pyarrow = ">=16.1.0,<16.2"
 
 [tool.pixi.feature.docs.tasks]
 serve = { cmd="mkdocs serve" }
