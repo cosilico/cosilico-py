@@ -5,7 +5,9 @@ description = "Command line tool and Python client for Cosilico"
 authors = [{name = "estorrs", email = "epstorrs@gmail.com"}]
 #requires-python = ">= 3.8"
 requires-python = ">=3.9,<=3.11.8" # can't be 3.11.9 due to dask bug with spatialdata-io
-dependencies = ["pydantic-extra-types", "spatialdata-io==0.1.2", "spatialdata==0.1.2"]
+#requires-python = ">=3.12"
+#dependencies = ["pydantic-extra-types", "spatialdata-io==0.1.2", "spatialdata==0.1.2"]
+dependencies = ["setuptools", "pydantic-extra-types", "spatialdata-io==0.1.2", "spatialdata==0.1.2"]
 
 [project.optional-dependencies]
 docs = ["griffe-typingdoc==0.2.2"]
@@ -19,8 +21,8 @@ build-backend = "setuptools.build_meta"
 packages = ["cosilico"]
 
 [tool.pixi.project]
-channels = ["conda-forge"]
-platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
+channels = ["conda-forge", "ome"]
+platforms = ["linux-64", "osx-64", "osx-arm64"]
 
 [tool.pixi.pypi-dependencies]
 cosilico = { path = ".", editable = true }
@@ -29,7 +31,7 @@ cosilico = { path = ".", editable = true }
 download-bioformats = { cmd="bash scripts/download_bftools.sh" }
 
 [tool.pixi.dependencies]
-numpy = ">=1.26.4,<1.27"
+numpy = "*"
 scikit-image = ">=0.22.0,<0.23"
 typer = ">=0.12.3,<0.13"
 typing_extensions = ">=4.12.1,<4.13"
@@ -44,8 +46,15 @@ zarr = ">=2.18.2,<2.19"
 einops = ">=0.8.0,<0.9"
 pandas = ">=2.2.2,<2.3"
 ome-types = ">=0.5.1.post1,<0.5.2"
-pyarrow = ">=16.1.0,<16.2"
-pygeos = "==0.14"
+#pyarrow = ">=16.1.0,<16.2"
+#pygeos = "==0.14"
+#pygeos = "*"
+#sqlite = ">=3.46.0,<3.47"
+#zlib = ">=1.3.1,<1.4"
+tippecanoe = ">=2.31.0,<2.32"
+bioformats2raw = ">=0.9.1,<0.10"
+shapely = ">=2.0.4,<2.1"
+gdal = ">=3.9.0,<3.10"
 
 [tool.pixi.feature.docs.tasks]
 serve = { cmd="mkdocs serve" }

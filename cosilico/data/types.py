@@ -2,12 +2,14 @@ from enum import Enum
 from pathlib import Path
 from typing import Union, List, Dict, Iterable
 
+from geopandas.geodataframe import GeoDataFrame, GeoSeries
 from geojson_pydantic import Feature, FeatureCollection
 from pydantic import BaseModel, Field, FilePath, model_validator
 from pydantic_extra_types.color import Color
 from numpy.typing import NDArray
 from scipy.sparse import spmatrix
 from typing_extensions import Annotated, Self
+import dask.array as da
 import numpy as np
 import pandas as pd
 import zarr
@@ -66,7 +68,7 @@ class MultiplexImage(BaseModel, validate_assignment=True):
     channels: Annotated[List[str], Field(
         description="Names of channels in image. Must be ordered."
     )]
-    data: Annotated[Union[zarr.Array | NDArray], Field(
+    data: Annotated[Union[zarr.Array | NDArray | da.core.Array], Field(
         description="Pixel data for image. Image shape is (n_channels, height, width).",
     )]
     resolution: Annotated[float, Field(
@@ -158,7 +160,6 @@ class FeatureGeometry(str, Enum):
     multipoint = 'multipoint'
     multiline = 'multiline'
     multipolygon = 'multipolygon'
-    geojson = 'geojson'
 
 class GeometryViewSettings(BaseModel, validate_assignment=True):
     """
@@ -213,7 +214,7 @@ class Property(BaseModel, validate_assignment=True):
     name: Annotated[str, Field(
         description='Name of property.'
     )]
-    data: Annotated[Union[zarr.Array | NDArray | pd.Series], Field(
+    data: Annotated[Union[zarr.Array | NDArray | da.core.Array | pd.Series], Field(
         description='1D array of length num_features. Order must match order of features in Layer.'
     )]
     feature_ids: Annotated[Union[Iterable[Union[str | int]] | None], Field(
@@ -282,7 +283,7 @@ class PropertyGroup(Property, validate_assignment=True):
     """
     Group of related properties of the same data type. Must have same data type and be stored in matrix form.
     """
-    data: Annotated[Union[zarr.Array | NDArray | spmatrix], Field(
+    data: Annotated[Union[zarr.Array | NDArray | spmatrix | da.core.Array], Field(
         description='Matrix of shape (num_features, num_properties).'
     )]
     property_names: Annotated[Union[Iterable[str] | None], Field(
@@ -329,19 +330,16 @@ class LayerFeatures(BaseModel, validate_assignment=True):
     """
     Feature of a layer.
     """
-    geometry: Annotated[FeatureGeometry, Field(
-        description='Geometry type of feature contained in layer.'
-    )]
-    feature_ids: Annotated[List[Union[str | int]], Field(
-        description="Feature IDs. Must be unique across all features."
-    )]
-    data: Annotated[Union[zarr.Array | FeatureCollection], Field(
+    data: Annotated[Union[zarr.Array | da.core.Array | NDArray | GeoSeries | GeoDataFrame | FeatureCollection], Field(
         description="""
                     Underlying data describing features.
 
-                    Can be either a Zarr Array or GeoJSON FeatureCollection.
+                    Can be either a numpy/Zarr/dask Array or GeoJSON FeatureCollection.
 
-                    A Zarr can be the following shape based on feature geometry type:
+                    A GeoDataFrame is assumed to have a column "geometry" that holds shaply geometry objects
+                    A GeoSeries is assumed to be a geoseries holding shaply geometry objects
+
+                    A array can be the following shape based on feature geometry type:
                     + point - (n_features, 2)
                     + line - (n_features, 2, 2)
                     + polygon - (n_features, n_max_poly_coords, 2)
@@ -363,41 +361,39 @@ class LayerFeatures(BaseModel, validate_assignment=True):
 
                     """
     )]
-
-    @model_validator(mode='after')
-    def validate_geometry(self) -> Self:
-        if self.geometry == FeatureGeometry.geojson and not isinstance(self.data, FeatureCollection):
-            raise ValueError('If feature geometry type is GeoJSON, then data must be of type FeatureCollection.')
-
-        return self
-    
-    @model_validator(mode='after')
-    def data_to_zarr(self) -> Self:
-        if not isinstance(self.data, zarr.Array) and not isinstance(self.data, FeatureCollection):
-            self.data = to_zarr(self.data)
-
-        return self
+    feature_ids: Annotated[Union[List[Union[str | int]] | None], Field(
+        description="Feature IDs. Must be unique across all features."
+    )] = None
+    geometry: Annotated[Union[FeatureGeometry | None], Field(
+        description='Geometry type of feature contained in layer.'
+    )] = None
 
     @model_validator(mode='after')
     def validate_features(self) -> Self:
         if isinstance(self.data, FeatureCollection):
             n_features = len(self.data.features)
+            assert self.feature_ids is not None, 'Must provide feature_ids if data is a FeatureCollection.'
+        if isinstance(self.data, GeoDataFrame) or isinstance(self.data, GeoSeries):
+            n_features = self.data.shape[0]
+            self.feature_ids = self.data.index.to_list()
         else:
             n_features = self.data.shape[0]
+            assert self.feature_ids is not None, 'Must provide feature_ids if data is an array.'
+
 
         if len(self.feature_ids) != n_features:
             raise ValueError(f'Length of `feature_ids` was {len(self.feature_ids)} and `data` was length {n_features}. Length of `feature_ids` and length of `data` must be equal.')
         if len(set(self.feature_ids)) != len(self.feature_ids):
-            raise ValueError('Values in `feature_ids` must be unique.')
-
-        if self.geometry != FeatureGeometry.geojson:
-            self.data.attrs['feature_ids'] = self.feature_ids
+            raise ValueError('Values in `feature_ids` or GeoSeries index must be unique.')
 
         return self
-    
-    def __del__(self):
-        if isinstance(self.data, zarr.Array):
-            delete_if_tmp(self.data)
+
+    @model_validator(mode='after')
+    def validate_geometry(self) -> Self:
+        
+        # TODO
+
+        return self
 
 
 class Layer(BaseModel, validate_assignment=True):

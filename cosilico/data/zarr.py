@@ -10,6 +10,7 @@ from einops import rearrange
 from numpy.typing import NDArray
 from scipy.sparse import spmatrix
 from zarr.storage import StoreLike
+import dask.array as da
 import numpy as np
 import zarr
 
@@ -35,11 +36,15 @@ def delete_if_tmp(
 
 def initialize_array(
     data: Union[spmatrix, NDArray],
-    store: Union[StoreLike | None] = None, 
+    store: Union[StoreLike | None] = None,
+    store_only: bool = False,
     ) -> zarr.Array:
     if store is None:
         directory = TemporaryDirectory(prefix=TMP_PREFIX, delete=False)
         store = Path(directory.name) / (str(uuid4()) + '.zarr')
+    
+    if store_only:
+        return store
 
     array = zarr.open(store, mode='a', shape=data.shape, dtype=data.dtype)
     return array
@@ -71,6 +76,16 @@ def numpy_to_zarr(
     array[:] = data
     return array
 
+def dask_to_zarr(
+    data: da.core.Array,
+    array: Union[zarr.Array | None] = None,
+    store: Union[StoreLike | None] = None,
+    ):
+    if store is None:
+        store = initialize_array(data, store, store_only=True)
+    array = da.to_zarr(array, store)
+    return array
+
 
 def to_zarr(
     data: Union[spmatrix | NDArray],
@@ -79,5 +94,7 @@ def to_zarr(
     ):
     if isinstance(data, spmatrix):
         return sparse_to_zarr(data, array, store)
+    elif isinstance(data, da.core.Array):
+        return dask_to_zarr(data, array, store)
     
     return numpy_to_zarr(data, array, store)

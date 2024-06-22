@@ -7,6 +7,9 @@ test_datasets/
 # test notebooks
 notebooks/
 
+# sandbox
+sandbox/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
