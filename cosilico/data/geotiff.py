@@ -1,10 +1,12 @@
 from pathlib import Path
+from numbers import Number
 from tempfile import TemporaryDirectory
 from typing import Union
 import os
 
 from numpy.typing import NDArray, DTypeLike
 from osgeo import gdal, osr
+from rich.progress import track
 from typing_extensions import Annotated, Doc
 import dask.array as da
 import numpy as np
@@ -26,9 +28,29 @@ DTYPE_MAPPING = {
     'uint64': gdal.GDT_UInt64,
 }
 
+class GeoTransform(object):
+    def __init__(
+            self, w: Number, h: Number,
+            x1: Number = X1, x2: Number = X2,
+            y1: Number = Y1, y2: Number = Y2    
+        ):
+        self.h, self.w = h, w
+        self.x_res = abs(x1 - x2) / w
+        self.y_res = abs(y1 - y2) / h
+
+    def latlon_to_pixel(self, lat: Number, lon: Number):
+        x = (lat - X1) / self.x_res
+        y = (lon - Y1) / self.y_res
+        return x, y
+
+    def pixel_to_latlon(self, x: Number, y: Number):
+        lat = X1 + x * self.x_res
+        lon = Y1 + y * self.y_res
+        return lat, lon
+
 def to_gdal_dtype(
     dtype: DTypeLike,
-    ):
+    ) -> int:
     name = np.dtype(dtype).name
     if name not in DTYPE_MAPPING:
         raise ValueError(f'data type {name} cannot be converted to GDAL data type.')
@@ -49,8 +71,8 @@ def write_geotiff(
     
     h, w = data.shape[-2:]
 
-    x_res = (X1 - X2) / w
-    y_res = (Y1 - Y2) / w
+    x_res = abs(X1 - X2) / w
+    y_res = abs(Y1 - Y2) / h
 
     driver = gdal.GetDriverByName('GTiff')
 
@@ -70,7 +92,7 @@ def write_geotiff(
 
     ds.SetGeoTransform((X1, x_res, 0, Y1, 0, y_res))
 
-    for i in range(data.shape[0]):
+    for i in track(range(data.shape[0]), description='Writting channels...'):
         band = ds.GetRasterBand(i + 1)
         band.WriteArray(data[i])
         band.FlushCache()
@@ -94,7 +116,7 @@ def write_cog(
     assert len(data.shape) == 3, f'data has {len(data.shape)} axes, expected shape of (n_channels, height, width)'
 
     with TemporaryDirectory() as directory:
-        geotiff_fp = Path(directory) / 'geo.tiff'
+        geotiff_fp = Path(directory) / 'geo.tif'
 
         geotiff_ds = write_geotiff(data, geotiff_fp)
 
