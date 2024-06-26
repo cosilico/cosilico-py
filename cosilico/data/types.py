@@ -15,7 +15,8 @@ import pandas as pd
 import zarr
 
 from cosilico.data.colors import Colormap
-from cosilico.data.conversion import to_microns_per_pixel, scale_data, convert_dtype
+from cosilico.data.units import to_microns_per_pixel
+from cosilico.data.conversion import scale_data, convert_dtype
 from cosilico.data.platforms import Platform, PlatformName
 from cosilico.data.zarr import to_zarr, delete_if_tmp
 
@@ -63,7 +64,7 @@ class MultiplexViewSettings(BaseModel, validate_assignment=True):
     )]
 
 
-class MultiplexImage(BaseModel, validate_assignment=True):
+class MultiplexImage(BaseModel, validate_assignment=True, arbitrary_types_allowed=True):
     """
     A multiplex image.
     """
@@ -209,7 +210,7 @@ class PropertyViewSettings(BaseModel, validate_assignment=True):
         description='Default view settings for layer geometries.'
     )] = GeometryViewSettings()
 
-class Property(BaseModel, validate_assignment=True):
+class Property(BaseModel, validate_assignment=True, arbitrary_types_allowed=True):
     """
     A property of layer features.
     """
@@ -281,7 +282,7 @@ class Property(BaseModel, validate_assignment=True):
             delete_if_tmp(self.data)
 
 
-class PropertyGroup(Property, validate_assignment=True):
+class PropertyGroup(Property, validate_assignment=True, arbitrary_types_allowed=True):
     """
     Group of related properties of the same data type. Must have same data type and be stored in matrix form.
     """
@@ -328,7 +329,7 @@ class PropertyGroup(Property, validate_assignment=True):
         if isinstance(self.data, zarr.Array):
             delete_if_tmp(self.data)
     
-class LayerFeatures(BaseModel, validate_assignment=True):
+class LayerFeatures(BaseModel, validate_assignment=True, arbitrary_types_allowed=True):
     """
     Feature of a layer.
     """

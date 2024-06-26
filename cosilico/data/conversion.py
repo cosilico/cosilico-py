@@ -1,27 +1,25 @@
-from typing import Union
+from __future__ import annotations
+from typing import Union, TYPE_CHECKING, Tuple, Iterable
 
-from pint import UnitRegistry
 from numpy.typing import NDArray
 from scipy.sparse import spmatrix
+import dask.array as da
 import numpy as np
 import zarr
 
-from cosilico.data.types import (
-    PixelDataType,
-    ScalingMethod,
-    MultiplexImage,
-    PropertyGroup,
-    Property
-)
-
-ureg = UnitRegistry()
-
-
+from cosilico.data.types import PixelDataType
+if TYPE_CHECKING:
+    from cosilico.data.types import (
+        ScalingMethod,
+        MultiplexImage,
+        PropertyGroup,
+        Property
+    )
 
 # Data type conversion
 
 def convert_dtype(
-    obj: Union[MultiplexImage | PropertyGroup | Property],
+    obj: Union['MultiplexImage' | 'PropertyGroup' | 'Property'],
     scale: bool = False,
     axis: Union[int | None] = None
     ):
@@ -44,33 +42,28 @@ def convert_dtype(
     return obj
 
 def scale_data(
-        data: Union[NDArray | spmatrix | zarr.Array],
-        data_type: PixelDataType,
-        scaling_method: ScalingMethod,
-        axis: Union[int | None] = None
+        data: Union[NDArray | spmatrix | zarr.Array | da.core.Array],
+        data_type: 'PixelDataType',
+        scaling_method: 'ScalingMethod',
+        axis: Union[int | Tuple[int], None] = None
     ):
     if scaling_method.value == 'min_max':
-        min_value, max_value = data[:].min(axis), data[:].max(axis)
+        min_value, max_value = data[:].min(axis, keepdims=True), data[:].max(axis, keepdims=True)
     elif scaling_method.value == 'mindtype_maxdtype':
         min_value, max_value = np.iinfo(data_type.value).min, np.iinfo(data_type.value).max
     elif scaling_method.value == 'zero_max':
-        min_value, max_value = 0, data[:].max(axis)
+        min_value, max_value = 0, data[:].max(axis, keepdims=True)
     elif scaling_method.value == 'zero_maxdtype':
         min_value, max_value = 0, np.iinfo(data_type.value).max
     elif scaling_method.value == 'min_maxdtype':
-        min_value, max_value = data[:].min(axis), np.iinfo(data_type.value).max
+        min_value, max_value = data[:].min(axis, keepdims=True), np.iinfo(data_type.value).max
 
     if scaling_method.value != 'no_scale':
-        data = data - min_value
-        data = data / max_value
+        data = data.astype(np.dtype('float32'))
+        data -= min_value
+        data /= max_value
+        data *= np.iinfo(data_type.value).max
 
     data = data.astype(data_type.value)
 
     return data
-
-
-# Unit conversion
-
-def to_microns_per_pixel(resolution, resolution_unit):
-    converted = (resolution * ureg(resolution_unit)).to('micron')
-    return converted.magnitude
