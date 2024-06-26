@@ -40,12 +40,12 @@ class GeoTransform(object):
 
     def latlon_to_pixel(self, lat: Number, lon: Number):
         x = (lat - X1) / self.x_res
-        y = (lon - Y1) / self.y_res
+        y = (lon + Y1) / self.y_res
         return x, y
 
     def pixel_to_latlon(self, x: Number, y: Number):
         lat = X1 + x * self.x_res
-        lon = Y1 + y * self.y_res
+        lon = Y1 - y * self.y_res
         return lat, lon
 
 def to_gdal_dtype(
@@ -94,7 +94,10 @@ def write_geotiff(
 
     for i in track(range(data.shape[0]), description='Writting channels...'):
         band = ds.GetRasterBand(i + 1)
-        band.WriteArray(data[i])
+        x = data[i]
+        if not isinstance(x, np.ndarray):
+            x = np.asarray(x)
+        band.WriteArray(x)
         band.FlushCache()
     
     srs = osr.SpatialReference()
