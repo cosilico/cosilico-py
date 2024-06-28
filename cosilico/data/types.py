@@ -4,7 +4,7 @@ from typing import Union, List, Dict, Iterable
 
 from geopandas.geodataframe import GeoDataFrame, GeoSeries
 from geojson_pydantic import Feature, FeatureCollection
-from pydantic import BaseModel, Field, FilePath, model_validator
+from pydantic import BaseModel, Field, FilePath, model_validator, DirectoryPath
 from pydantic_extra_types.color import Color
 from numpy.typing import NDArray
 from scipy.sparse import spmatrix
@@ -68,21 +68,24 @@ class MultiplexImage(BaseModel, validate_assignment=True, arbitrary_types_allowe
     """
     A multiplex image.
     """
-    channels: Annotated[List[str], Field(
-        description="Names of channels in image. Must be ordered."
-    )]
-    data: Annotated[Union[zarr.Array | NDArray | da.core.Array], Field(
-        description="Pixel data for image. Image shape is (n_channels, height, width).",
-    )]
-    resolution: Annotated[float, Field(
-        description="Resolution of image given in `resolution_unit`s per pixel",
-        gt=0.
-    )]
-    resolution_unit: Annotated[str, Field(
-        description="Resolution unit. Can be any string that is recognized by the [Pint](https://pint.readthedocs.io/en/stable/) Python library. In practice, this is a lot of unit string representations (covering many different unit systems) as long as they are reasonably named. For example, micron, micrometer, and μm could all be used for micrometers."
-    )]
     source_filepath: Annotated[Union[FilePath | None], Field(
         description="Filepath source image was read from."
+    )] = None
+    ngff_store: Annotated[Union[DirectoryPath | None], Field(
+        description='Directory to store OME-NGFF zarr store. If not is provided than a temporary directory is created.'
+    )] = None
+    channels: Annotated[Union[List[str] | None], Field(
+        description="Names of channels in image. Must be ordered."
+    )] = None
+    data: Annotated[Union[zarr.Array | NDArray | da.core.Array | None], Field(
+        description="Pixel data for image. Image shape is (n_channels, height, width).",
+    )] = None
+    resolution: Annotated[Union[float | None], Field(
+        description="Resolution of image given in `resolution_unit`s per pixel",
+        gt=0.
+    )] = None
+    resolution_unit: Annotated[Union[str | None], Field(
+        description="Resolution unit. Can be any string that is recognized by the [Pint](https://pint.readthedocs.io/en/stable/) Python library. In practice, this is a lot of unit string representations (covering many different unit systems) as long as they are reasonably named. For example, micron, micrometer, and μm could all be used for micrometers."
     )] = None
     name: Annotated[str, Field(
         description="Name of image. Defaults to `source_filepath` filename if not defined."
@@ -108,6 +111,21 @@ class MultiplexImage(BaseModel, validate_assignment=True, arbitrary_types_allowe
     experiment_id: Annotated[Union[str | int | None], Field(
         description='Experiment ID image belongs to. Not required for initialization. Populated by supabase.'
     )] = None
+
+    @model_validator(mode='after')
+    def check_source(self) -> Self:
+        all_provided = all(
+            self.channels is not None,
+            self.data is not None,
+            self.resolution is not None,
+            self.resolution_unit is not None
+        )
+        if self.source_filepath is None and not all_provided:
+            raise ValueError(f'If source image filepath is not provided, then channels, data, resolution and resolution_unit must be specified.')
+
+        
+
+        return self
 
     @model_validator(mode='after')
     def set_name(self) -> Self:
