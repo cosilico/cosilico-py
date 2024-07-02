@@ -6,40 +6,20 @@ from geopandas.geodataframe import GeoDataFrame, GeoSeries
 from geojson_pydantic import Feature, FeatureCollection
 from pydantic import BaseModel, Field, FilePath, model_validator, DirectoryPath
 from pydantic_extra_types.color import Color
-from numpy.typing import NDArray
+from numpy.typing import NDArray, DTypeLike
 from scipy.sparse import spmatrix
 from typing_extensions import Annotated, Self
 import dask.array as da
 import numpy as np
 import pandas as pd
 import zarr
+import zarr.convenience
 
 from cosilico.data.colors import Colormap
 from cosilico.data.units import to_microns_per_pixel
-from cosilico.data.conversion import scale_data, convert_dtype
+from cosilico.data.conversion import scale_data, ScalingMethod
 from cosilico.data.platforms import Platform, PlatformName
 from cosilico.data.zarr import to_zarr, delete_if_tmp
-
-
-class PixelDataType(Enum):
-    uint8 = np.uint8
-    uint16 = np.uint16
-    uint32 = np.uint32
-    uint64 = np.uint64
-    int8 = np.int8
-    int16 = np.int16
-    int32 = np.int32
-    int64 = np.int64
-    float32 = np.float32
-    float64 = np.float64
-
-class ScalingMethod(str, Enum):
-    min_max = 'min_max'
-    zero_max = 'zero_max'
-    min_maxdtype = 'min_maxdtype'
-    zero_maxdtype = 'zero_maxdtype'
-    mindtype_max_dtype = 'mindtype_maxdtype'
-    no_scale = 'no_scale'
 
 class ChannelViewSettings(BaseModel, validate_assignment=True):
     """
@@ -68,40 +48,37 @@ class MultiplexImage(BaseModel, validate_assignment=True, arbitrary_types_allowe
     """
     A multiplex image.
     """
-    source_filepath: Annotated[Union[FilePath | None], Field(
-        description="Filepath source image was read from."
-    )] = None
-    ngff_store: Annotated[Union[DirectoryPath | None], Field(
-        description='Directory to store OME-NGFF zarr store. If not is provided than a temporary directory is created.'
-    )] = None
-    channels: Annotated[Union[List[str] | None], Field(
+    channels: Annotated[List[str], Field(
         description="Names of channels in image. Must be ordered."
-    )] = None
-    data: Annotated[Union[zarr.Array | NDArray | da.core.Array | None], Field(
+    )]
+    data: Annotated[zarr.Array, Field(
         description="Pixel data for image. Image shape is (n_channels, height, width).",
-    )] = None
+    )]
     resolution: Annotated[Union[float | None], Field(
         description="Resolution of image given in `resolution_unit`s per pixel",
         gt=0.
-    )] = None
-    resolution_unit: Annotated[Union[str | None], Field(
-        description="Resolution unit. Can be any string that is recognized by the [Pint](https://pint.readthedocs.io/en/stable/) Python library. In practice, this is a lot of unit string representations (covering many different unit systems) as long as they are reasonably named. For example, micron, micrometer, and μm could all be used for micrometers."
-    )] = None
+    )]
+    source_path: Annotated[zarr.convenience.StoreLike, Field(
+        description='OME-NGFF zarr directory acting as a store.'
+    )]
     name: Annotated[str, Field(
         description="Name of image. Defaults to `source_filepath` filename if not defined."
     )] = ''
-    data_type: Annotated[Union[PixelDataType, None], Field(
-        description="Pixel data type of the image. If not specified will be set to data type of `data`. If specified and `data_type` does not match data type of `data`, then data will be converted to the specified `data_type`."
-    )] = None
-    scaling_method: Annotated[ScalingMethod, Field(
-        description="How to scale data if data type conversion is required. Only applicable if `data_type` is different from `data` data type."
-    )] = ScalingMethod.min_max
-    force_scale: Annotated[bool, Field(
-        description='Force data to scale based on scaling_method, even if data_type and data.dtype match.'
-    )] = False
-    microns_per_pixel: Annotated[Union[float | None], Field(
-        description="Resolution of image in microns per pixel. If not defined, will be automatically calculated from `resolution` and `resolution_unit`."
-    )] = None
+    resolution_unit: Annotated[Union[str | None], Field(
+        description="Resolution unit. Can be any string that is recognized by the [Pint](https://pint.readthedocs.io/en/stable/) Python library. In practice, this is a lot of unit string representations (covering many different unit systems) as long as they are reasonably named. For example, micron, micrometer, and μm could all be used for micrometers."
+    )] = 'µm'
+    # data_type: Annotated[Union[DTypeLike, None], Field(
+    #     description="Pixel data type of the image. If not specified will be set to data type of `data`. If specified and `data_type` does not match data type of `data`, then data will be converted to the specified `data_type`."
+    # )] = None
+    # scaling_method: Annotated[ScalingMethod, Field(
+    #     description="How to scale data if data type conversion is required. Only applicable if `data_type` is different from `data` data type."
+    # )] = ScalingMethod.min_max
+    # force_scale: Annotated[bool, Field(
+    #     description='Force data to scale based on scaling_method, even if data_type and data.dtype match.'
+    # )] = False
+    # microns_per_pixel: Annotated[Union[float | None], Field(
+    #     description="Resolution of image in microns per pixel. If not defined, will be automatically calculated from `resolution` and `resolution_unit`."
+    # )] = None
     view_settings: Annotated[Union[MultiplexViewSettings | None], Field(
         description="View settings for image. If not defined, will be automatically generated based on `channels`"
     )] = None
@@ -112,20 +89,12 @@ class MultiplexImage(BaseModel, validate_assignment=True, arbitrary_types_allowe
         description='Experiment ID image belongs to. Not required for initialization. Populated by supabase.'
     )] = None
 
-    @model_validator(mode='after')
-    def check_source(self) -> Self:
-        all_provided = all(
-            self.channels is not None,
-            self.data is not None,
-            self.resolution is not None,
-            self.resolution_unit is not None
-        )
-        if self.source_filepath is None and not all_provided:
-            raise ValueError(f'If source image filepath is not provided, then channels, data, resolution and resolution_unit must be specified.')
-
-        
-
-        return self
+    # @model_validator(mode='after')
+    # def validate_source_path(self) -> Self:
+    #     if self.source_path is not None:
+    #         ext = self.source_path.suffix
+    #         assert ext == '.zarr', f'Directory must be OME-NGFF formatted zarr. Got extension {ext}'
+    #     return self
 
     @model_validator(mode='after')
     def set_name(self) -> Self:
@@ -134,23 +103,23 @@ class MultiplexImage(BaseModel, validate_assignment=True, arbitrary_types_allowe
                 self.name = self.source_filepath.name
         return self
 
-    @model_validator(mode='after')
-    def calculate_microns_per_pixel(self) -> Self:
-        if self.microns_per_pixel is None:
-            self.microns_per_pixel = to_microns_per_pixel(self.resolution, self.resolution_unit)
-        return self
+    # @model_validator(mode='after')
+    # def calculate_microns_per_pixel(self) -> Self:
+    #     if self.microns_per_pixel is None:
+    #         self.microns_per_pixel = to_microns_per_pixel(self.resolution, self.resolution_unit)
+    #     return self
     
-    @model_validator(mode='after')
-    def convert_data_type(self) -> Self:
-        return convert_dtype(self)
+    # @model_validator(mode='after')
+    # def convert_data_type(self) -> Self:
+    #     return convert_dtype(self)
     
     @model_validator(mode='after')
     def generate_view_settings(self) -> Self:
         if self.view_settings is None:
             self.view_settings = MultiplexViewSettings(
                 channel_views=[ChannelViewSettings(
-                    min_value=np.iinfo(self.data_type.value).min,
-                    max_value=np.iinfo(self.data_type.value).max
+                    min_value=np.iinfo(self.data.dtype).min,
+                    max_value=np.iinfo(self.data.dtype).max
                 ) for _ in self.channels]
             )
         return self
@@ -235,21 +204,24 @@ class Property(BaseModel, validate_assignment=True, arbitrary_types_allowed=True
     name: Annotated[str, Field(
         description='Name of property.'
     )]
-    data: Annotated[Union[zarr.Array | NDArray | da.core.Array | pd.Series], Field(
+    # data: Annotated[Union[zarr.Array | NDArray | da.core.Array | pd.Series], Field(
+    #     description='1D array of length num_features. Order must match order of features in Layer.'
+    # )]
+    data: Annotated[zarr.Array, Field(
         description='1D array of length num_features. Order must match order of features in Layer.'
     )]
     feature_ids: Annotated[Union[Iterable[Union[str | int]] | None], Field(
         description='Layer feature IDs properties correspond to. Must match order of rows in `data`.'
     )] = None
-    data_type: Annotated[Union[PixelDataType | None], Field(
-        description='Data type to store `data` as. If not specified, will match data type of `data`. If specified and different from `data` data type then `data` will be transformed to the given data type with the specified `scaling_method`.'
-    )] = None
-    scaling_method: Annotated[ScalingMethod, Field(
-        description="How to scale data if data type conversion is required. Only applicable if `data_type` is different from `data` data type."
-    )] = ScalingMethod.min_max
-    force_scale: Annotated[bool, Field(
-        description='Force data to scale based on scaling_method, even if data_type and data.dtype match.'
-    )] = False
+    # data_type: Annotated[Union[PixelDataType | None], Field(
+    #     description='Data type to store `data` as. If not specified, will match data type of `data`. If specified and different from `data` data type then `data` will be transformed to the given data type with the specified `scaling_method`.'
+    # )] = None
+    # scaling_method: Annotated[ScalingMethod, Field(
+    #     description="How to scale data if data type conversion is required. Only applicable if `data_type` is different from `data` data type."
+    # )] = ScalingMethod.min_max
+    # force_scale: Annotated[bool, Field(
+    #     description='Force data to scale based on scaling_method, even if data_type and data.dtype match.'
+    # )] = False
     view_settings: Annotated[Union[PropertyViewSettings | None], Field(
         description="View settings for a Layer property. If not provided, will be displayed with default view settings for Layer."
     )] = None
@@ -286,25 +258,28 @@ class Property(BaseModel, validate_assignment=True, arbitrary_types_allowed=True
     def data_to_zarr(self) -> Self:
         if len(self.data.shape) > 1:
             raise ValueError(f'data must be 1D array. Got array with shape {self.data.shape}.')
-        if not isinstance(self.data, zarr.Array):
-            self.data = to_zarr(self.data)
+        # if not isinstance(self.data, zarr.Array):
+        #     self.data = to_zarr(self.data)
 
         return self
 
-    @model_validator(mode='after')
-    def convert_data_type(self) -> Self:
-        return convert_dtype(self, scale=self.force_scale)
+    # @model_validator(mode='after')
+    # def convert_data_type(self) -> Self:
+    #     return convert_dtype(self, scale=self.force_scale)
     
-    def __del__(self):
-        if isinstance(self.data, zarr.Array):
-            delete_if_tmp(self.data)
+    # def __del__(self):
+    #     if isinstance(self.data, zarr.Array):
+    #         delete_if_tmp(self.data)
 
 
 class PropertyGroup(Property, validate_assignment=True, arbitrary_types_allowed=True):
     """
     Group of related properties of the same data type. Must have same data type and be stored in matrix form.
     """
-    data: Annotated[Union[zarr.Array | NDArray | spmatrix | da.core.Array], Field(
+    # data: Annotated[Union[zarr.Array | NDArray | spmatrix | da.core.Array], Field(
+    #     description='Matrix of shape (num_features, num_properties).'
+    # )]
+    data: Annotated[zarr.Array, Field(
         description='Matrix of shape (num_features, num_properties).'
     )]
     property_names: Annotated[Union[Iterable[str] | None], Field(
@@ -330,58 +305,61 @@ class PropertyGroup(Property, validate_assignment=True, arbitrary_types_allowed=
 
         return self
 
-    @model_validator(mode='after')
-    def data_to_zarr(self) -> Self:
-        if not isinstance(self.data, zarr.Array):
-            self.data = to_zarr(self.data)
+    # @model_validator(mode='after')
+    # def data_to_zarr(self) -> Self:
+    #     if not isinstance(self.data, zarr.Array):
+    #         self.data = to_zarr(self.data)
 
-        self.data.attrs['property_names'] = self.property_names
+    #     self.data.attrs['property_names'] = self.property_names
 
-        return self
+    #     return self
     
-    @model_validator(mode='after')
-    def convert_data_type(self) -> Self:
-        return convert_dtype(self, scale=self.force_scale, axis=0)
+    # @model_validator(mode='after')
+    # def convert_data_type(self) -> Self:
+    #     return convert_dtype(self, scale=self.force_scale, axis=0)
 
-    def __del__(self):
-        if isinstance(self.data, zarr.Array):
-            delete_if_tmp(self.data)
+    # def __del__(self):
+    #     if isinstance(self.data, zarr.Array):
+    #         delete_if_tmp(self.data)
     
 class LayerFeatures(BaseModel, validate_assignment=True, arbitrary_types_allowed=True):
     """
     Feature of a layer.
     """
-    data: Annotated[Union[zarr.Array | da.core.Array | NDArray | GeoSeries | GeoDataFrame | FeatureCollection], Field(
-        description="""
-                    Underlying data describing features.
-
-                    Can be either a numpy/Zarr/dask Array or GeoJSON FeatureCollection.
-
-                    A GeoDataFrame is assumed to have a column "geometry" that holds shaply geometry objects
-                    A GeoSeries is assumed to be a geoseries holding shaply geometry objects
-
-                    A array can be the following shape based on feature geometry type:
-                    + point - (n_features, 2)
-                    + line - (n_features, 2, 2)
-                    + polygon - (n_features, n_max_poly_coords, 2)
-                    + multipoint - (n_features, n_max_objects, 2)
-                    + multiline - (n_features, n_max_objects, 2, 2)
-                    + multipolygon - (n_features, n_max_objects, n_max_poly_coords, 2)
-
-                    n_features - number of features in layer
-                    n_max_objects - maximum number of objects in a multi-geometry
-                    n_max_poly_coords - maximum number of points describing polygon coordinates
-
-                    Coordinates are stored as float32
-
-                    ```python
-                    array.attrs["feature_ids"] = feature_ids
-                    ```
-                    
-                    GeoJSON FeatureCollection should only be used for Layers with a small number of features (i.e. manually drawn annotations, etc.) or it is necessary to have multiple geometry types within the same layer (i.e. mixing points and polygons, etc.). GeoJSON files get large very quickly and should be avoided if a Zarr can be used.
-
-                    """
+    data: Annotated[zarr.Array, Field(
+        description='Underlying data describing features.'
     )]
+    # data: Annotated[Union[zarr.Array | da.core.Array | NDArray | GeoSeries | GeoDataFrame | FeatureCollection], Field(
+    #     description="""
+    #                 Underlying data describing features.
+
+    #                 Can be either a numpy/Zarr/dask Array or GeoJSON FeatureCollection.
+
+    #                 A GeoDataFrame is assumed to have a column "geometry" that holds shaply geometry objects
+    #                 A GeoSeries is assumed to be a geoseries holding shaply geometry objects
+
+    #                 A array can be the following shape based on feature geometry type:
+    #                 + point - (n_features, 2)
+    #                 + line - (n_features, 2, 2)
+    #                 + polygon - (n_features, n_max_poly_coords, 2)
+    #                 + multipoint - (n_features, n_max_objects, 2)
+    #                 + multiline - (n_features, n_max_objects, 2, 2)
+    #                 + multipolygon - (n_features, n_max_objects, n_max_poly_coords, 2)
+
+    #                 n_features - number of features in layer
+    #                 n_max_objects - maximum number of objects in a multi-geometry
+    #                 n_max_poly_coords - maximum number of points describing polygon coordinates
+
+    #                 Coordinates are stored as float32
+
+    #                 ```python
+    #                 array.attrs["feature_ids"] = feature_ids
+    #                 ```
+                    
+    #                 GeoJSON FeatureCollection should only be used for Layers with a small number of features (i.e. manually drawn annotations, etc.) or it is necessary to have multiple geometry types within the same layer (i.e. mixing points and polygons, etc.). GeoJSON files get large very quickly and should be avoided if a Zarr can be used.
+
+    #                 """
+    # )]
     feature_ids: Annotated[Union[List[Union[str | int]] | None], Field(
         description="Feature IDs. Must be unique across all features."
     )] = None
@@ -391,15 +369,15 @@ class LayerFeatures(BaseModel, validate_assignment=True, arbitrary_types_allowed
 
     @model_validator(mode='after')
     def validate_features(self) -> Self:
-        if isinstance(self.data, FeatureCollection):
-            n_features = len(self.data.features)
-            assert self.feature_ids is not None, 'Must provide feature_ids if data is a FeatureCollection.'
-        if isinstance(self.data, GeoDataFrame) or isinstance(self.data, GeoSeries):
-            n_features = self.data.shape[0]
-            self.feature_ids = self.data.index.to_list()
-        else:
-            n_features = self.data.shape[0]
-            assert self.feature_ids is not None, 'Must provide feature_ids if data is an array.'
+        # if isinstance(self.data, FeatureCollection):
+        #     n_features = len(self.data.features)
+        #     assert self.feature_ids is not None, 'Must provide feature_ids if data is a FeatureCollection.'
+        # if isinstance(self.data, GeoDataFrame) or isinstance(self.data, GeoSeries):
+        #     n_features = self.data.shape[0]
+        #     self.feature_ids = self.data.index.to_list()
+        # else:
+        n_features = self.data.shape[0]
+        assert self.feature_ids is not None, 'Must provide feature_ids if data is an array.'
 
 
         if len(self.feature_ids) != n_features:

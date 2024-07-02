@@ -62,6 +62,9 @@ class CosilicoClient(object):
         self._session = data.sessions
         self._user = data.user
 
+    # admin methods
+    def create_user(self):
+        pass
     def add_user(self):
         pass
     def get_user(self):
@@ -75,11 +78,58 @@ class CosilicoClient(object):
     def reassign_experiment(self):
         pass
 
+
+
+    # user methods
     def get_organization(self):
         pass
     def list_organization_members(self):
         pass
     
+    def create_experiment(self):
+        pass
+    def create_layer(self):
+        pass
+    def create_image(
+            # scaling_method: Annotated[ScalingMethod, Field(
+            #     description="How to scale data if data type conversion is required. Only applicable if `data_type` is different from `data` data type."
+            # )] = ScalingMethod.min_max
+            # force_scale: Annotated[bool, Field(
+            #     description='Force data to scale based on scaling_method, even if data_type and data.dtype match.'
+            # )] = False
+            # microns_per_pixel: Annotated[Union[float | None], Field(
+            #     description="Resolution of image in microns per pixel. If not defined, will be automatically calculated from `resolution` and `resolution_unit`."
+            # )] = None
+        ):
+        # user_defined = all(
+        #     self.channels is not None,
+        #     self.data is not None,
+        #     self.resolution is not None,
+        #     self.resolution_unit is not None
+        # )
+        # if self.source_filepath is None and not user_defined:
+        #     raise ValueError(f'If source image filepath is not provided, then channels, data, resolution and resolution_unit must be specified.')
+
+        # if self.source_filepath is not None:
+        #     ext = self.source_filepath.suffix
+        #     # check ome zarr
+        #     if ext == '.zarr' and 
+
+
+        # if user_defined:
+        #     pass
+        # else:
+    #         @model_validator(mode='after')
+    # def calculate_microns_per_pixel(self) -> Self:
+    #     if self.microns_per_pixel is None:
+    #         self.microns_per_pixel = to_microns_per_pixel(self.resolution, self.resolution_unit)
+    #     return self
+        
+            
+
+        # return self
+    def create_property(self):
+        pass
     def add_experiment(self):
         pass
     def add_layer(self):
@@ -158,9 +208,3 @@ class CosilicoClient(object):
         pass
     def move_collection(self):
         pass
-
-    
-
-  
-
-
