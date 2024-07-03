@@ -48,6 +48,9 @@ class MultiplexImage(BaseModel, validate_assignment=True, arbitrary_types_allowe
     """
     A multiplex image.
     """
+    name: Annotated[str, Field(
+        description="Name of image. Defaults to `source_filepath` filename if not defined."
+    )]
     channels: Annotated[List[str], Field(
         description="Names of channels in image. Must be ordered."
     )]
@@ -58,12 +61,6 @@ class MultiplexImage(BaseModel, validate_assignment=True, arbitrary_types_allowe
         description="Resolution of image given in `resolution_unit`s per pixel",
         gt=0.
     )]
-    source_path: Annotated[zarr.convenience.StoreLike, Field(
-        description='OME-NGFF zarr directory acting as a store.'
-    )]
-    name: Annotated[str, Field(
-        description="Name of image. Defaults to `source_filepath` filename if not defined."
-    )] = ''
     resolution_unit: Annotated[Union[str | None], Field(
         description="Resolution unit. Can be any string that is recognized by the [Pint](https://pint.readthedocs.io/en/stable/) Python library. In practice, this is a lot of unit string representations (covering many different unit systems) as long as they are reasonably named. For example, micron, micrometer, and μm could all be used for micrometers."
     )] = 'µm'
@@ -96,12 +93,12 @@ class MultiplexImage(BaseModel, validate_assignment=True, arbitrary_types_allowe
     #         assert ext == '.zarr', f'Directory must be OME-NGFF formatted zarr. Got extension {ext}'
     #     return self
 
-    @model_validator(mode='after')
-    def set_name(self) -> Self:
-        if not self.name:
-            if self.source_filepath is not None:
-                self.name = self.source_filepath.name
-        return self
+    # @model_validator(mode='after')
+    # def set_name(self) -> Self:
+    #     if not self.name:
+    #         if self.source_filepath is not None:
+    #             self.name = self.source_filepath.name
+    #     return self
 
     # @model_validator(mode='after')
     # def calculate_microns_per_pixel(self) -> Self:

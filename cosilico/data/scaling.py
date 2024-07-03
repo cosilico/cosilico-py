@@ -7,6 +7,8 @@ import dask.array as da
 import numpy as np
 import zarr
 
+from cosilico.typing import ArrayLike
+
 class ScalingMethod(str, Enum):
     min_max = 'min_max'
     zero_max = 'zero_max'
@@ -16,18 +18,21 @@ class ScalingMethod(str, Enum):
     no_scale = 'no_scale'
 
 def scale_data(
-        data: Union[NDArray | spmatrix | zarr.Array | da.core.Array],
-        dtype: Union[DTypeLike] = None,
+        data: ArrayLike,
+        dtype: Union[DTypeLike | None] = None,
         scaling_method: Union[ScalingMethod | None] = ScalingMethod.min_max,
         axis: Union[int | Tuple[int], None] = None,
         target_range: Union[Tuple[int] | None] = None
-    ) -> Union[NDArray | spmatrix | zarr.Array | da.core.Array]:
+    ) -> ArrayLike:
     if target_range is None and scaling_method is None:
         scaling_method = ScalingMethod.min_max
+    
+    if dtype is None:
+        dtype = data.dtype
 
     dtype = np.dtype(dtype)
 
-    if scaling_method is not None:
+    if target_range is None:
         if scaling_method.value == 'min_max':
             min_value, max_value = data[:].min(axis, keepdims=True), data[:].max(axis, keepdims=True)
         elif scaling_method.value == 'mindtype_maxdtype':
