@@ -1,9 +1,7 @@
-from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Union, Iterable, Callable
+from typing import Union, Iterable
 import os
 
-from einops import rearrange
 from ome_types import OME, model, to_xml
 from typing_extensions import Annotated, Doc
 import dask.array as da
@@ -12,12 +10,16 @@ import tifffile
 import zarr
 
 from cosilico.wrappers.bioformats import to_ngff
-from cosilico.data.transforms import Scale
 from cosilico.typing import ArrayLike
 
 
 def create_ome_model(data, channels, resolution, resolution_unit) -> OME:
-    # create ome tif
+    if len(data.shape) == 3:
+        c, h, w = data.shape
+        t, z = 1, 1
+    else:
+        t, z, c, h, w = data.shape
+
     dtype_name = str(np.dtype(data.dtype))
     if 'int' in dtype_name:
         assert dtype_name in ['int8', 'int16', 'int32', 'uint8', 'uint16', 'uint32']
@@ -34,25 +36,28 @@ def create_ome_model(data, channels, resolution, resolution_unit) -> OME:
             id='Image:0',
             pixels=model.Pixels(
                 dimension_order='XYCZT',
-                size_c=len(channels),
-                size_t=1,
-                size_z=1,
-                size_x=data.shape[2],
-                size_y=data.shape[1],
+                size_c=c,
+                size_t=t,
+                size_z=z,
+                size_x=w,
+                size_y=h,
                 type=dtype_name,
                 big_endian=False,
-                channels=[model.Channel(id=f'Channel:{i}', name=c) for i, c in enumerate(channels)],
+                channels=[model.Channel(id=f'Channel:{i}', name=x, samples_per_pixel=1)
+                          for i, x in enumerate(channels)],
                 physical_size_x=resolution,
                 physical_size_y=resolution,
                 physical_size_x_unit=resolution_unit,
-                physical_size_y_unit=resolution_unit
+                physical_size_y_unit=resolution_unit,
             )
         )
     )
 
     im = o.images[0]
-    for i in range(len(im.pixels.channels)):
-        im.pixels.planes.append(model.Plane(the_c=i, the_t=0, the_z=0))
+    for c_idx in range(c):
+        for t_idx in range(t):
+            for z_idx in range(z):
+                im.pixels.planes.append(model.Plane(the_c=c_idx, the_t=t_idx, the_z=z_idx))
     im.pixels.tiff_data_blocks.append(model.TiffData(plane_count=len(im.pixels.planes)))
 
     return o
@@ -60,7 +65,7 @@ def create_ome_model(data, channels, resolution, resolution_unit) -> OME:
 
 def ome_from_data(
     data: Annotated[ArrayLike, Doc(
-        'Source array to generate NGFF from. Can be dask, numpy, or zarr array. Must have shape (num_channels, height, width).'
+        'Source array to generate NGFF from. Can be dask, numpy, or zarr array. Must have shape (num_channels, height, width) or (num_timepoints, depth, num_channels, height, width).'
     )],
     output_path: Annotated[os.PathLike, Doc(
         'Filepath to write OME-TIF.'
@@ -82,8 +87,10 @@ def ome_from_data(
     #     'Number of pyramids to write in pyramidal OME-TIF. By default none are written.'
     # )] = None,
     ):
-    assert len(data.shape) == 3, f'data must have 3 axes of shape (num_channels, height, width). Got {len(data.shape)} axes.'
-    assert channels is None or len(channels) == data.shape[0], f'Number of channels (got {len(channels)}) must be equal to length of first axis in data (got {data.shape[0]}). '
+    assert len(data.shape) == 3 or len(data.shape) == 5, f'data must have 3 axes of shape (num_channels, height, width) or 5 axes of shape (num_timepoints, depth, num_channels, height, width). Got {len(data.shape)} axes.'
+    assert channels is None or len(channels) == data.shape[-3], f'Number of channels (got {len(channels)}) must be equal to length of channel axis in data (got {data.shape[-3]}). '
+    if isinstance(data, zarr.Array):
+        assert len(data.shape) == 5, f'If data is a zarr.Array, it must have 5 axes of shape (num_timepoints, depth, num_channels, height, width). Got {len(data.shape)} axes.'
 
     if ome_model is None:
         assert all(
@@ -92,7 +99,8 @@ def ome_from_data(
         ome_model = create_ome_model(data, channels, resolution, resolution_unit)
 
     with tifffile.TiffWriter(output_path, ome=True, bigtiff=True) as out_tif:
-        data = da.expand_dims(data, (0, 1))
+        if len(data.shape) == 3:
+            data = da.expand_dims(data, (0, 1))
         opts = {
             'compression': 'LZW',
         }
@@ -102,7 +110,6 @@ def ome_from_data(
         )
         xml_str = to_xml(ome_model)
         out_tif.overwrite_description(xml_str.encode())
-
 
 
 def ngff_from_data(
@@ -136,4 +143,3 @@ def ngff_from_data(
         )
 
         to_ngff(ome_path, output_path)
-
