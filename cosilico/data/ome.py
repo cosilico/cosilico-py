@@ -1,7 +1,8 @@
 from tempfile import TemporaryDirectory
-from typing import Union, Iterable
+from typing import Union, Iterable, Tuple
 import os
 
+from numpy.typing import DTypeLike
 from ome_types import OME, model, to_xml
 from typing_extensions import Annotated, Doc
 import dask.array as da
@@ -9,6 +10,7 @@ import numpy as np
 import tifffile
 import zarr
 
+from cosilico.data.transforms import Scale, ScalingMethod
 from cosilico.wrappers.bioformats import to_ngff
 from cosilico.typing import ArrayLike
 
@@ -81,6 +83,18 @@ def ome_from_data(
     )] = None,
     ome_model: Annotated[Union[OME | None], Doc(
         'OME model to use when saving OME-TIF. By default a simple OME model will be created based on other function arguments. If more specific or complex OME metadata is desired, an `ome_types.OME` model can be provided and will be saved as the metadata for the OME-TIF.'
+    )] = None,
+    target_dtype: Annotated[Union[DTypeLike | None], Doc(
+        'Target data type. `scaling_method`, `scaling_axis`, and `scaling_range` will determine how the data is scaled to be converted to the target data type. If target dtype is None or matches the input data type then no scaling will occur. By default target data type is uint8. Note that images saved for use with Cosilico viewer must be uint8.'
+    )] = np.uint8,
+    scaling_method: Annotated[Union[ScalingMethod | None], Doc(
+        'Method used to scale data to fit the range of the target data type. Default is `min_max`.'
+    )] = ScalingMethod.min_max,
+    scaling_range: Annotated[Union[Tuple[int] | None], Doc(
+        'If present, will be used in place of `scaling method`. Specifies a target range data will be scaled to.'
+    )] = None,
+    scaling_axis: Annotated[Union[int | Tuple[int], None], Doc(
+        'Axes along which to scale data. If None, scaling will be done individually for each channel.'
     )] = None
     # will add pyramids back in later, slightly complicated to do right now.
     # pyramids: Annotated[Union[int | None], Doc(
@@ -92,6 +106,19 @@ def ome_from_data(
     if isinstance(data, zarr.Array):
         assert len(data.shape) == 5, f'If data is a zarr.Array, it must have 5 axes of shape (num_timepoints, depth, num_channels, height, width). Got {len(data.shape)} axes.'
 
+    # scale data if we need to
+    if target_dtype is not None and np.dtype(target_dtype) != np.dtype(data.dtype):
+        if scaling_axis is None:
+            scaling_axis = (1, 2) if len(data.shape) == 3 else (0, 1, 3, 4)
+        scaler = Scale(
+            method=scaling_method,
+            dtype=target_dtype,
+            target_range=scaling_range,
+            axis=scaling_axis
+        )
+        data = scaler(data)
+
+    # generate ome model
     if ome_model is None:
         assert all(
             [x is not None for x in [channels, resolution, resolution_unit]]
@@ -130,6 +157,24 @@ def ngff_from_data(
     )] = None,
     ome_model: Annotated[Union[OME | None], Doc(
         'OME model to use when saving OME-TIF. By default a simple OME model will be created based on other function arguments. If more specific or complex OME metadata is desired, an `ome_types.OME` model can be provided and will be saved as the metadata for the OME-TIF.'
+    )] = None,
+    target_dtype: Annotated[Union[DTypeLike | None], Doc(
+        'Target data type. `scaling_method`, `scaling_axis`, and `scaling_range` will determine how the data is scaled to be converted to the target data type. If target dtype is None or matches the input data type then no scaling will occur. By default target data type is uint8. Note that images saved for use with Cosilico viewer must be uint8.'
+    )] = np.uint8,
+    scaling_method: Annotated[Union[ScalingMethod | None], Doc(
+        'Method used to scale data to fit the range of the target data type. Default is `min_max`.'
+    )] = ScalingMethod.min_max,
+    scaling_range: Annotated[Union[Tuple[int] | None], Doc(
+        'If present, will be used in place of `scaling method`. Specifies a target range data will be scaled to.'
+    )] = None,
+    scaling_axis: Annotated[Union[int | Tuple[int], None], Doc(
+        'Axes along which to scale data. If None, scaling will be done individually for each channel.'
+    )] = None,
+    tile_width: Annotated[Union[int | None], Doc(
+        'Width of tiles/chunks (in pixels) that will be written in Zarr arrays. Bioformats2raw defaults are used if no size is provided.'
+    )] = None,
+    tile_height: Annotated[Union[int | None], Doc(
+        'Height of tiles/chunks (in pixels) that will be written in Zarr arrays. Bioformats2raw defaults are used if no size is provided.'
     )] = None
     ):
     with TemporaryDirectory() as tempdir:
@@ -139,7 +184,11 @@ def ngff_from_data(
             channels=channels,
             resolution=resolution,
             resolution_unit=resolution_unit,
-            ome_model=ome_model
+            ome_model=ome_model,
+            target_dtype=target_dtype,
+            scaling_method=scaling_method,
+            scaling_range=scaling_range,
+            scaling_axis=scaling_axis
         )
 
-        to_ngff(ome_path, output_path)
+        to_ngff(ome_path, output_path, tile_height=tile_height, tile_width=tile_width)

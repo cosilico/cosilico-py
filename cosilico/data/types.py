@@ -17,7 +17,7 @@ import zarr.convenience
 
 from cosilico.data.colors import Colormap
 from cosilico.data.units import to_microns_per_pixel
-from cosilico.data.conversion import scale_data, ScalingMethod
+from cosilico.data.scaling import scale_data, ScalingMethod
 from cosilico.data.platforms import Platform, PlatformName
 from cosilico.data.zarr import to_zarr, delete_if_tmp
 

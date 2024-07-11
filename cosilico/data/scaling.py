@@ -48,6 +48,11 @@ def scale_data(
 
     if scaling_method.value != 'no_scale':
         dtype_min, dtype_max = np.iinfo(dtype).min, np.iinfo(dtype).max
+        try:
+            max_value[max_value == 0] = 1. # make sure we don't divide by zero
+        except TypeError:
+            pass
+
         data = data.astype(np.float32)
         data = (data - min_value) / (max_value - min_value)
         data = data * (dtype_max - dtype_min) + dtype_min

@@ -59,7 +59,16 @@ def to_ngff(
         dimension_order: Annotated[
             str,
             Doc("Dimension order. Must be valid order as specified by OME schema")
-        ] = 'XYCZT'
+        ] = 'XYCZT',
+        tile_width: Annotated[
+            Union[int | None],
+            Doc("Width of zarr chunks. Bioformats2raw defaults are used if not provided.")
+        ] = None,
+        tile_height: Annotated[
+            Union[int | None],
+            Doc("Height of zarr chunks. Bioformats2raw defaults are used if not provided.")
+        ] = None,
+
     ):
     input_filepath, output_directory = Path(input_filepath), Path(output_directory)
 
@@ -77,6 +86,10 @@ def to_ngff(
         opts += ['--overwrite']
     if resolutions is not None:
         opts += ['--resolutions', str(resolutions)]
+    if tile_height is not None:
+        opts += ['--tile-height', str(tile_height)]
+    if tile_width is not None:
+        opts += ['--tile-width', str(tile_width)]
 
     cmds = [
         'bioformats2raw',

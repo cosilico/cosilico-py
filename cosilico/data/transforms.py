@@ -15,27 +15,6 @@ from cosilico.typing import ArrayLike
 from cosilico.data.zarr import to_zarr
 
 
-# class ToZarr(object):
-#     """
-#     Converts an array of data to zarr.
-#     """
-#     def __init__(self):
-#         pass
-
-#     def __call__(
-#         self,
-#         data: Annotated[Union[NDArray | spmatrix | da.core.Array | zarr.Array], Doc(
-#             'Convert an ND array of data to zarr.'
-#         )],
-#         store: Annotated[Union[zarr.convenience.StoreLike | None], Doc(
-#             'Zarr store.'
-#         )] = None,
-#         ):
-#         if not isinstance(data, zarr.Array):
-#             return to_zarr(data, store=store)
-
-#         return data
-
 class Scale(object):
     """
     Scale data
