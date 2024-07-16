@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Union
 import os
 import re
+import shutil
 
 from typing_extensions import Annotated, Doc
 
@@ -41,6 +42,8 @@ def to_ngff(
                 Filepath to write zarr directory for OME-NGFF image.
 
                 If not specified will default to filename prefix of input_filepath. Filename prefix will be all characters prior to first '.' in filename.
+
+                If extension is ".zip" then directory will be zipped.
                 """
             )
         ] = None,
@@ -68,9 +71,14 @@ def to_ngff(
             Union[int | None],
             Doc("Height of zarr chunks. Bioformats2raw defaults are used if not provided.")
         ] = None,
-
     ):
     input_filepath, output_directory = Path(input_filepath), Path(output_directory)
+
+    if output_directory.suffix == '.zip':
+        output_directory = output_directory.parent / output_directory.stem
+        is_zipped = True
+    else:
+        is_zipped = False
 
     if output_directory is None:
         output_directory = input_filepath.parent / input_filepath.name.split('.')[0]
@@ -101,6 +109,10 @@ def to_ngff(
     ]
 
     realtime_subprocess(cmds)
+
+    if is_zipped:
+        shutil.make_archive(output_directory, 'zip', output_directory)
+        os.remove(output_directory) # remove non-zipped directory
 
 
 def to_ome(
