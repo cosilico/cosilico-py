@@ -112,7 +112,7 @@ def to_ngff(
 
     if is_zipped:
         shutil.make_archive(output_directory, 'zip', output_directory)
-        os.remove(output_directory) # remove non-zipped directory
+        shutil.rmtree(output_directory) # remove non-zipped directory
 
 
 def to_ome(
