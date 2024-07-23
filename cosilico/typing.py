@@ -7,3 +7,6 @@ import numpy as np
 import zarr
 
 ArrayLike = Union[NDArray | spmatrix | da.core.Array | zarr.Array]
+
+# currently only uint8 is supported by frontend
+NGFF_DTYPES = ['uint8']

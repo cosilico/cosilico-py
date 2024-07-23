@@ -10,7 +10,8 @@ import numpy as np
 import tifffile
 import zarr
 
-from cosilico.data.transforms import Scale, ScalingMethod
+# from cosilico.data.transforms import Scale, ScalingMethod
+from cosilico.data.scaling import scale_data, ScalingMethod
 from cosilico.wrappers.bioformats import to_ngff
 from cosilico.typing import ArrayLike
 
@@ -110,13 +111,13 @@ def ome_from_data(
     if target_dtype is not None and np.dtype(target_dtype) != np.dtype(data.dtype):
         if scaling_axis is None:
             scaling_axis = (1, 2) if len(data.shape) == 3 else (0, 1, 3, 4)
-        scaler = Scale(
-            method=scaling_method,
-            dtype=target_dtype,
+        data = scale_data(
+            data,
+            target_dtype=target_dtype,
+            scaling_method=scaling_method,
             target_range=scaling_range,
             axis=scaling_axis
-        )
-        data = scaler(data)
+        ) 
 
     # generate ome model
     if ome_model is None:

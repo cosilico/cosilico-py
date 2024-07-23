@@ -1,14 +1,17 @@
 from enum import Enum
 from pathlib import Path
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 from typing import Union, List, Dict, Iterable
+import os
 
 from geopandas.geodataframe import GeoDataFrame, GeoSeries
 from geojson_pydantic import Feature, FeatureCollection
 from pydantic import BaseModel, Field, FilePath, model_validator, DirectoryPath
 from pydantic_extra_types.color import Color
 from numpy.typing import NDArray, DTypeLike
+from rich import print
 from scipy.sparse import spmatrix
-from typing_extensions import Annotated, Self
+from typing_extensions import Annotated, Self, TypedDict
 import dask.array as da
 import numpy as np
 import pandas as pd
@@ -17,9 +20,11 @@ import zarr.convenience
 
 from cosilico.data.colors import Colormap
 from cosilico.data.units import to_microns_per_pixel
-from cosilico.data.scaling import scale_data, ScalingMethod
+from cosilico.data.ome import ngff_from_data
+from cosilico.data.scaling import scale_data, SCALING_METHODS
 from cosilico.data.platforms import Platform, PlatformName
 from cosilico.data.zarr import to_zarr, delete_if_tmp
+from cosilico.typing import ArrayLike, NGFF_DTYPES
 
 class ChannelViewSettings(BaseModel, validate_assignment=True):
     """
@@ -49,12 +54,12 @@ class MultiplexImage(BaseModel, validate_assignment=True, arbitrary_types_allowe
     A multiplex image.
     """
     name: Annotated[str, Field(
-        description="Name of image. Defaults to `source_filepath` filename if not defined."
+        description="Name of image."
     )]
     channels: Annotated[List[str], Field(
         description="Names of channels in image. Must be ordered."
     )]
-    data: Annotated[zarr.Array, Field(
+    data: Annotated[ArrayLike, Field(
         description="Pixel data for image. Image shape is (n_channels, height, width).",
     )]
     resolution: Annotated[Union[float | None], Field(
@@ -62,20 +67,28 @@ class MultiplexImage(BaseModel, validate_assignment=True, arbitrary_types_allowe
         gt=0.
     )]
     resolution_unit: Annotated[Union[str | None], Field(
-        description="Resolution unit. Can be any string that is recognized by the [Pint](https://pint.readthedocs.io/en/stable/) Python library. In practice, this is a lot of unit string representations (covering many different unit systems) as long as they are reasonably named. For example, micron, micrometer, and μm could all be used for micrometers."
+        description='Resolution unit. Must be valid UnitsLength as specified in [OME-TIF schema](https://www.openmicroscopy.org/Schemas/Documentation/Generated/OME-2016-06/ome.html)'
+        # description="Resolution unit. Can be any string that is recognized by the [Pint](https://pint.readthedocs.io/en/stable/) Python library. In practice, this is a lot of unit string representations (covering many different unit systems) as long as they are reasonably named. For example, micron, micrometer, and μm could all be used for micrometers."
     )] = 'µm'
-    # data_type: Annotated[Union[DTypeLike, None], Field(
-    #     description="Pixel data type of the image. If not specified will be set to data type of `data`. If specified and `data_type` does not match data type of `data`, then data will be converted to the specified `data_type`."
-    # )] = None
-    # scaling_method: Annotated[ScalingMethod, Field(
-    #     description="How to scale data if data type conversion is required. Only applicable if `data_type` is different from `data` data type."
-    # )] = ScalingMethod.min_max
-    # force_scale: Annotated[bool, Field(
-    #     description='Force data to scale based on scaling_method, even if data_type and data.dtype match.'
-    # )] = False
-    # microns_per_pixel: Annotated[Union[float | None], Field(
-    #     description="Resolution of image in microns per pixel. If not defined, will be automatically calculated from `resolution` and `resolution_unit`."
-    # )] = None
+    ngff_filepath: Annotated[Union[os.PathLike | None], Field(
+        description="Filepath where OME-NGFF zarr will be written. By default will be written to system TMP directory."
+    )] = None
+    ngff_tile_size: Annotated[int, Field(
+        description='Tile size to use when writing OME-NGFF zarr.',
+        gt=0,
+    )] = 512
+    ngff_zarr: Annotated[Union[zarr.Group | None], Field(
+        description='Zarr group representing OME-NGFF. By default will be automatically generated.'
+    )] = None
+    data_type: Annotated[Union[str | np.dtype | None], Field(
+        description=f"Pixel data type of the OME-NGFF image. If not specified will be set to data type of `data`. If specified and `data_type` does not match data type of `data`, then data will be converted to the specified `data_type`. Currently the following data types are supported: {NGFF_DTYPES}."
+    )] = np.uint8
+    scaling_method: Annotated[str, Field(
+        description=f"How to scale data if data type conversion is required. Only applicable if `data_type` is different from `data` data type. Must be one of {SCALING_METHODS}"
+    )] = 'min_max'
+    force_scale: Annotated[bool, Field(
+        description='Force data to scale based on scaling_method, even if data_type and data.dtype match.'
+    )] = False
     view_settings: Annotated[Union[MultiplexViewSettings | None], Field(
         description="View settings for image. If not defined, will be automatically generated based on `channels`"
     )] = None
@@ -102,21 +115,52 @@ class MultiplexImage(BaseModel, validate_assignment=True, arbitrary_types_allowe
 
     # @model_validator(mode='after')
     # def calculate_microns_per_pixel(self) -> Self:
-    #     if self.microns_per_pixel is None:
-    #         self.microns_per_pixel = to_microns_per_pixel(self.resolution, self.resolution_unit)
+    #     self.microns_per_pixel = to_microns_per_pixel(self.resolution, self.resolution_unit)
     #     return self
     
-    # @model_validator(mode='after')
-    # def convert_data_type(self) -> Self:
-    #     return convert_dtype(self)
+    @model_validator(mode='after')
+    def check_data_type(self) -> Self:
+        if self.data_type is not None:
+            dtype_str = np.dtype(self.data_type).name
+            assert dtype_str in NGFF_DTYPES, f'data_type must be one of {NGFF_DTYPES}, got {dtype_str}.'
+        else:
+            self.data_type = np.uint8
+        return self
+    
+    @model_validator(mode='after')
+    def generate_ome_ngff(self) -> Self:
+        if self.ngff_filepath is None:
+            tmpfile = NamedTemporaryFile(delete=False)
+            self.ngff_filepath = tmpfile.name + '.ome.zarr.zip'
+            path = Path(self.ngff_filepath)
+            tmpfile.close()
+        else:
+            path = Path(self.ngff_filepath)
+        assert path.suffix == '.zip', f'ngff_filepath must have .zip extension, got {path}.'
+
+        if self.ngff_zarr is None:
+            print(f'Generating OME-NGFF image at [bold red]{path}[/bold red].')
+            ngff_from_data(
+                data=self.data,
+                output_path=path,
+                channels=self.channels,
+                resolution=self.resolution,
+                resolution_unit=self.resolution_unit,
+                tile_height=self.ngff_tile_size,
+                tile_width=self.ngff_tile_size,
+            )
+            self.ngff_zarr = zarr.open(path)
+        return self
+    
+
     
     @model_validator(mode='after')
     def generate_view_settings(self) -> Self:
         if self.view_settings is None:
             self.view_settings = MultiplexViewSettings(
                 channel_views=[ChannelViewSettings(
-                    min_value=np.iinfo(self.data.dtype).min,
-                    max_value=np.iinfo(self.data.dtype).max
+                    min_value=np.iinfo(np.dtype(self.data_type)).min,
+                    max_value=np.iinfo(np.dtype(self.data_type)).max
                 ) for _ in self.channels]
             )
         return self

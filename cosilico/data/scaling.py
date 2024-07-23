@@ -9,54 +9,49 @@ import zarr
 
 from cosilico.typing import ArrayLike
 
-class ScalingMethod(str, Enum):
-    min_max = 'min_max'
-    zero_max = 'zero_max'
-    min_maxdtype = 'min_maxdtype'
-    zero_maxdtype = 'zero_maxdtype'
-    mindtype_max_dtype = 'mindtype_maxdtype'
-    no_scale = 'no_scale'
+SCALING_METHODS = ['min_max', 'zero_max', 'min_maxdtype', 'zero_maxdtype', 'mindtype_maxdtype', 'no_scale']
 
 def scale_data(
         data: ArrayLike,
-        dtype: Union[DTypeLike | None] = None,
-        scaling_method: Union[ScalingMethod | None] = ScalingMethod.min_max,
+        target_dtype: Union[DTypeLike | None] = None,
+        scaling_method: Union[str | None] = 'min_max',
         axis: Union[int | Tuple[int], None] = None,
         target_range: Union[Tuple[int] | None] = None
     ) -> ArrayLike:
     if target_range is None and scaling_method is None:
-        scaling_method = ScalingMethod.min_max
-    
-    if dtype is None:
-        dtype = data.dtype
+        scaling_method = 'min_max'
 
-    dtype = np.dtype(dtype)
+    if scaling_method is not None:
+        assert scaling_method in SCALING_METHODS, f'scaling_method must be one of {SCALING_METHODS}'
+    
+    if target_dtype is None:
+        target_dtype = data.dtype
+    target_dtype = np.dtype(target_dtype)
+
+    current_dtype = np.dtype(data.dtype)
+
 
     if target_range is None:
         if scaling_method.value == 'min_max':
             min_value, max_value = data[:].min(axis, keepdims=True), data[:].max(axis, keepdims=True)
         elif scaling_method.value == 'mindtype_maxdtype':
-            min_value, max_value = np.iinfo(dtype).min, np.iinfo(dtype).max
+            min_value, max_value = np.iinfo(current_dtype).min, np.iinfo(current_dtype).max
         elif scaling_method.value == 'zero_max':
             min_value, max_value = 0, data[:].max(axis, keepdims=True)
         elif scaling_method.value == 'zero_maxdtype':
-            min_value, max_value = 0, np.iinfo(dtype).max
+            min_value, max_value = 0, np.iinfo(current_dtype).max
         elif scaling_method.value == 'min_maxdtype':
-            min_value, max_value = data[:].min(axis, keepdims=True), np.iinfo(dtype).max
+            min_value, max_value = data[:].min(axis, keepdims=True), np.iinfo(current_dtype).max
     else:
         min_value, max_value = target_range
 
     if scaling_method.value != 'no_scale':
-        dtype_min, dtype_max = np.iinfo(dtype).min, np.iinfo(dtype).max
-        try:
-            max_value[max_value == 0] = 1. # make sure we don't divide by zero
-        except TypeError:
-            pass
+        dtype_min, dtype_max = np.iinfo(target_dtype).min, np.iinfo(target_dtype).max
 
         data = data.astype(np.float32)
         data = (data - min_value) / (max_value - min_value)
         data = data * (dtype_max - dtype_min) + dtype_min
 
-    data = data.astype(dtype)
+    data = data.astype(target_dtype)
 
     return data
