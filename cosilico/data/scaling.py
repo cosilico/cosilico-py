@@ -9,12 +9,18 @@ import zarr
 
 from cosilico.typing import ArrayLike
 
-SCALING_METHODS = ['min_max', 'zero_max', 'min_maxdtype', 'zero_maxdtype', 'mindtype_maxdtype', 'no_scale']
+class ScalingMethod(str, Enum):
+    min_max = 'min_max'
+    zero_max = 'zero_max'
+    min_maxdtype = 'min_maxdtype'
+    zero_maxdtype = 'zero_maxdtype'
+    mindtype_maxdtype = 'mindtype_maxdtype'
+    no_scale = 'no_scale'
 
 def scale_data(
         data: ArrayLike,
         target_dtype: Union[DTypeLike | None] = None,
-        scaling_method: Union[str | None] = 'min_max',
+        scaling_method: Union[ScalingMethod | None] = 'min_max',
         axis: Union[int | Tuple[int], None] = None,
         target_range: Union[Tuple[int] | None] = None
     ) -> ArrayLike:
@@ -22,7 +28,8 @@ def scale_data(
         scaling_method = 'min_max'
 
     if scaling_method is not None:
-        assert scaling_method in SCALING_METHODS, f'scaling_method must be one of {SCALING_METHODS}'
+        values = {x.value for x in ScalingMethod}
+        assert scaling_method in values, f'scaling_method must be one of {values}'
     
     if target_dtype is None:
         target_dtype = data.dtype
