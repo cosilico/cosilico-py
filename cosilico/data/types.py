@@ -126,7 +126,7 @@ class MultiplexImage(BaseModel, validate_assignment=True, arbitrary_types_allowe
     @model_validator(mode='after')
     def generate_ome_ngff(self) -> Self:
         if self.ngff_zarr is None:
-            print(f'Generating OME-NGFF image at [bold red]{self.ngff_filepath}[/bold red].')
+            print(f'Generating OME-NGFF image at {self.ngff_filepath}.')
             ngff_from_data(
                 data=self.data,
                 output_path=self.ngff_filepath,
@@ -461,12 +461,14 @@ class Layer(BaseModel, validate_assignment=True, arbitrary_types_allowed=True):
 
     @model_validator(mode='after')
     def set_resolution(self) -> Self:
+        print('here')
         if self.resolution is None:
             self.resolution = self.image.resolution
         return self
     
     @model_validator(mode='after')
     def set_feature_ids(self) -> Self:
+        print('here2')
         if self.feature_ids is None:
             self.feature_ids = [f'feature_{i}' for i in range(len(self.coordinates))]
         
@@ -475,9 +477,11 @@ class Layer(BaseModel, validate_assignment=True, arbitrary_types_allowed=True):
     
     @model_validator(mode='after')
     def set_zarr_filepath(self) -> Self:
+        print('here3')
         if self.zarr_filepath is None:
             tmpfile = NamedTemporaryFile(delete=False)
             self.zarr_filepath = tmpfile.name + '.zarr.zip'
+            print(self.zarr_filepath)
             tmpfile.close()
         path = Path(self.zarr_filepath)
 
@@ -487,86 +491,97 @@ class Layer(BaseModel, validate_assignment=True, arbitrary_types_allowed=True):
 
     @model_validator(mode='after')
     def generate_zarr(self) -> Self:
+        print('here4')
         n_zooms = len(self.image.ngff_zarr[0])
         tile_size = self.image.ngff_tile_size
-        scaler = self.image.resolution / self.resolution
+        scaler = self.resolution / self.image.resolution
 
-        g = zarr.Group(self.zarr_filepath)
-        g.attrs['type'] = self.geometry_type if isinstance(
-            self.geometry_type, Enum) else self.geometry_type
-        g['ids'] = np.arange(len(self.feature_ids))
+        if self.layer_zarr is None:
+            g = zarr.group(self.zarr_filepath, overwrite=True)
+            g.attrs['type'] = self.geometry_type if isinstance(
+                self.geometry_type, Enum) else self.geometry_type
+            g['ids'] = np.arange(len(self.feature_ids))
+            g.create_group('geometries', overwrite=True)
+            g.create_group('indices', overwrite=True)
 
-        # create geometries
-        print(f'Processing coordinates for {len(self.coordinates)} features.')
-        if isinstance(self.coordinates, GeoSeries):
-            coords = geoseries_to_coords(
-                self.coordinates,
-                n_target_verts=self.max_vertices
+            # create geometries
+            print(f'Processing coordinates for {len(self.coordinates)} features.')
+            if isinstance(self.coordinates, GeoSeries):
+                coords = geoseries_to_coords(
+                    self.coordinates,
+                    n_target_verts=self.max_vertices
+                )
+                coords = da.asarray(coords, dtype=np.float32)
+            elif isinstance(self.coordinates, ArrayLike):
+                assert self.coordinates.shape[1] == 2, f'Second axis should be of size 2 (i.e. X, Y), got {self.coordinates.shape}'
+                coords = da.asarray(self.coordinates)
+            elif isinstance(self.coordinates, Iterable):
+                assert len(self.coordinates[0]) == 2, f'Length of entries should be of size 2 (i.e. X, Y), got {len(self.coordinates[0])}'
+                coords = da.asarray(self.coordinates)
+
+            coords *= scaler
+            assert coords.shape[1] == 2, f'Second axis should be of size 2 (i.e. X, Y), got {self.coordinates.shape}'
+            g['geometries'][0] = coords.compute() # just pull all into memory for now, may need to make mem efficient later
+
+            # do indices for each zoom level
+            print('Calculating visible features for each zoom level.')
+            df = dask.dataframe.from_pandas(
+                pd.DataFrame(index=np.arange(len(coords))),
+                npartitions=1
             )
-            coords = da.asarray(coords, dtype=np.float32)
-        elif isinstance(self.coordinates, ArrayLike):
-            assert self.coordinates.shape[1] == 2, f'Second axis should be of size 2 (i.e. X, Y), got {self.coordinates.shape}'
-            coords = da.asarray(self.coordinates)
-        elif isinstance(self.coordinates, Iterable):
-            assert len(self.coordinates[0]) == 2, f'Length of entries should be of size 2 (i.e. X, Y), got {len(self.coordinates[0])}'
-            coords = da.asarray(self.coordinates)
+            if len(coords.shape) == 3:
+                df['x'], df['y'] = coords[:, 0, 0], coords[:, 1, 0]
+            else:
+                df['x'], df['y'] = coords[:, 0], coords[:, 1]
+            for zoom in range(n_zooms):
+                print(f'Starting zoom level {zoom}.')
+                df[f'chunk_x_{zoom}'] = (df['x'] / tile_size // (zoom + 1)).astype(int)
+                df[f'chunk_y_{zoom}'] = (df['y'] / tile_size // (zoom + 1)).astype(int)
+                df[f'chunk_id_{zoom}'] = da.asarray(
+                    [f'{x}_{y}' for x, y in zip(df[f'chunk_x_{zoom}'], df[f'chunk_y_{zoom}'])]
+                )
 
-        coords *= scaler
-        assert coords.shape[1] == 2, f'Second axis should be of size 2 (i.e. X, Y), got {self.coordinates.shape}'
-        g['geometries'][0] = coords.compute() # just pull all into memory for now, may need to make mem efficient later
+                chunks = df[f'chunk_id_{zoom}'].values.compute()
+                pool = np.unique(chunks)
+                # chunk_to_count = {chunk:0 for chunk in chunks}
+                # # entity_idxs = []
+                # for chunk in df[f'chunk_id_{zoom}']:
+                #     # entity_idxs.append(chunk_to_count[chunk])
+                #     chunk_to_count[chunk] += 1
+                entity_idxs = da.asarray(np.zeros((len(df),), dtype=np.int32))
+                for chunk in pool:
+                    mask = chunks == chunk
+                    n = np.count_nonzero(mask)
+                    entity_idxs[mask] = np.random.permutation(n)
+                df[f'entity_idx_{zoom}'] = da.asarray(entity_idxs)
 
-        # do indices for each zoom level
-        print('Calculating visible features for each zoom level.')
-        df = dask.dataframe.from_pandas(
-            pd.DataFrame(index=np.arange(len(coords))),
-            npartitions=1
-        )
-        if len(coords.shape) == 3:
-            df['x'], df['y'] = coords[:, 0, 0], coords[:, 1, 0]
-        else:
-            df['x'], df['y'] = coords[:, 0], coords[:, 1]
-        for zoom in range(n_zooms):
-            print(f'Starting zoom level {zoom}.')
-            df[f'chunk_x_{zoom}'] = (df['x'] // tile_size).astype(int)
-            df[f'chunk_y_{zoom}'] = (df['y'] // tile_size).astype(int)
-            df[f'chunk_id_{zoom}'] = da.asarray(
-                [f'{x}_{y}' for x, y in zip(df[f'chunk_x_{zoom}'], df[f'chunk_y_{zoom}'])]
-            )
+                # only to max count
+                df['keep'] = da.asarray(df[f'entity_idx_{zoom}'] < self.max_visible_features)
+                fdf = df.query('keep')
 
-            chunks = da.unique(df[f'chunk_id_{zoom}'].values).compute()
-            chunk_to_count = {chunk:0 for chunk in chunks}
-            entity_idxs = []
-            for chunk in df[f'chunk_id_{zoom}']:
-                entity_idxs.append(chunk_to_count[chunk])
-                chunk_to_count[chunk] += 1
-            df[f'entity_idx_{zoom}'] = da.asarray(entity_idxs)
+                chunk_x_max, chunk_y_max = fdf[[f'chunk_x_{zoom}', f'chunk_y_{zoom}']].max().compute()
+                idxs = fdf[[f'chunk_y_{zoom}', f'chunk_x_{zoom}', f'entity_idx_{zoom}']].values.compute()
 
-            # only to max count
-            n_feats = self.max_visible_features
-            df['keep'] = da.asarray(df[f'entity_idx_{zoom}'] < n_feats)
-            df = df.query('keep')
+                n_feats = fdf[['x', f'chunk_id_{zoom}']].groupby(
+                    f'chunk_id_{zoom}').count()[['x']].max().compute().item()
 
-            chunk_x_max, chunk_y_max = df[[f'chunk_x_{zoom}', f'chunk_x_{zoom}']].max().compute()
+                g['indices'][zoom] = zarr.full(
+                    (chunk_y_max + 1, chunk_x_max + 1, n_feats),
+                    -1,
+                    chunks=(1, 1, n_feats),
+                    dtype=np.int32
+                )
+                g['indices'][zoom][
+                    idxs[:, 0], idxs[:, 1], idxs[:, 2]] = np.arange(fdf.shape[0].compute())
 
-            idxs = df[[f'chunk_y_{zoom}', f'chunk_x_{zoom}', f'entity_idx_{zoom}']].values.compute()
-
-            g['indices'][zoom] = zarr.full(
-                (chunk_y_max + 1, chunk_x_max + 1, n_feats),
-                -1,
-                chunks=(1, 1, n_feats),
-                dtype=np.int32
-            )
-            g['indices'][zoom][
-                idxs[:, 0], idxs[:, 1], idxs[:, 2]] = np.arange(df.shape[0].compute())
-   
-        self.layer_zarr = g
+            self.layer_zarr = g
 
         return self
 
 
 class Property(BaseModel, validate_assignment=True, arbitrary_types_allowed=True):
     """
-    A property of layer features.
+    A property of a layer.
     """
     name: Annotated[str, Field(
         description='Name of property.'
