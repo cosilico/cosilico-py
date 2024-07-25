@@ -3,6 +3,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 from typing import Union, List, Dict, Iterable
 import os
+import warnings
 
 import dask.dataframe
 from geopandas.geodataframe import GeoDataFrame, GeoSeries
@@ -52,23 +53,23 @@ class MultiplexViewSettings(BaseModel, validate_assignment=True):
     )]
 
 
-class MultiplexImage(BaseModel, validate_assignment=True, arbitrary_types_allowed=True):
+class MultiplexImage(BaseModel, validate_assignment=False, arbitrary_types_allowed=True):
     """
     A multiplex image.
     """
     name: Annotated[str, Field(
         description="Name of image."
     )]
-    channels: Annotated[List[str], Field(
+    channels: Annotated[Union[List[str] | None], Field(
         description="Names of channels in image. Must be ordered."
-    )]
-    data: Annotated[ArrayLike, Field(
+    )] = None
+    data: Annotated[Union[ArrayLike | None], Field(
         description="Pixel data for image. Image shape is (n_channels, height, width).",
-    )]
+    )] = None
     resolution: Annotated[Union[float | None], Field(
         description="Resolution of image given in `resolution_unit`s per pixel",
         gt=0.
-    )]
+    )] = None
     resolution_unit: Annotated[Union[str | None], Field(
         description='Resolution unit. Must be valid UnitsLength as specified in [OME-TIF schema](https://www.openmicroscopy.org/Schemas/Documentation/Generated/OME-2016-06/ome.html)'
         # description="Resolution unit. Can be any string that is recognized by the [Pint](https://pint.readthedocs.io/en/stable/) Python library. In practice, this is a lot of unit string representations (covering many different unit systems) as long as they are reasonably named. For example, micron, micrometer, and μm could all be used for micrometers."
@@ -101,6 +102,33 @@ class MultiplexImage(BaseModel, validate_assignment=True, arbitrary_types_allowe
     experiment_id: Annotated[Union[str | int | None], Field(
         description='Experiment ID image belongs to. Not required for initialization. Populated by supabase.'
     )] = None
+
+    @model_validator(mode='after')
+    def load_ngff_from_filepath(self) -> Self:
+        if any([
+            self.data is None,
+            self.channels is None,
+            self.resolution is None,
+        ]) and self.ngff_filepath is None:
+            raise ValueError(f'If ngff_filepath is not provided, then data, channels, and resolution must be specified.')
+        
+        if any([
+            self.data is None,
+            self.channels is None,
+            self.resolution is None,
+        ]) and self.ngff_filepath is not None:
+            print(f'data, channels, or resolution not provided. Attempting to load NGFF-OME from {self.ngff_filepath}')
+            assert Path(self.ngff_filepath).exists(), f'data, channels, or resolution was not provided. ngff_filepath must exist.'
+            self.ngff_zarr = zarr.open(self.ngff_filepath)
+            metadata = self.ngff_zarr[0].attrs['multiscales'][0]
+            omero = self.ngff_zarr[0].attrs['omero']
+            self.resolution = metadata['datasets'][0]['coordinateTransformations'][0]['scale'][-1]
+            self.resolution_unit = metadata['axes'][-1]['unit']
+            self.channels = [c['label'] for c in omero['channels']]
+            self.data = self.ngff_zarr[0][0]
+            self.ngff_tile_size = self.data.chunks[-1]
+
+        return self
     
     @model_validator(mode='after')
     def check_data_type(self) -> Self:
@@ -216,173 +244,74 @@ class PropertyViewSettings(BaseModel, validate_assignment=True):
     )] = GeometryViewSettings()
 
 
-
+def generate_feature_zarrs(
+        coords: da.Array,
+        n_zooms: int,
+        tile_size: int,
+        max_visible_features: int,
+        group: zarr.Group,
+        labels: Union[Iterable | None],
+    ):
+    df = dask.dataframe.from_pandas(
+        pd.DataFrame(index=np.arange(len(coords))),
+        npartitions=1
+    )
+    if len(coords.shape) == 3:
+        df['x'], df['y'] = coords[:, 0, 0], coords[:, 1, 0]
+    else:
+        df['x'], df['y'] = coords[:, 0], coords[:, 1]
     
-    # @model_validator(mode='after')
-    # def generate_zarr(self) -> Self:
-    #     df = dask.dataframe.from_pandas(
-    #         pd.DataFrame(index=np.arange(len(self.feature_ids))),
-    #         npartitions=1
-    #     )
+    for zoom in range(n_zooms):
+        print(f'Starting zoom level {zoom}.')
+        df[f'chunk_x_{zoom}'] = (df['x'] / tile_size // (zoom + 1)).astype(int)
+        df[f'chunk_y_{zoom}'] = (df['y'] / tile_size // (zoom + 1)).astype(int)
 
-    #     tdf['x_target_res'] = tdf['x'] / res
-    #     tdf['y_target_res'] = tdf['y'] / res
-    #     tdf['chunk_x'] = (tdf['x_target_res'] // tile_size).astype(int)
-    #     tdf['chunk_y'] = (tdf['y_target_res'] // tile_size).astype(int)
-    #     tdf['cp_id'] = da.asarray([f'{x}_{y}_{z}' for x, y, z in zip(tdf['chunk_x'], tdf['chunk_y'], tdf['codeword_index'])])
-    #     tdf['chunk'] = da.asarray([f'{x}_{y}' for x, y in zip(tdf['chunk_x'], tdf['chunk_y'])])
+        if labels is None:
+            df[f'chunk_id_{zoom}'] = da.asarray(
+                [f'{x}_{y}' for x, y in zip(df[f'chunk_x_{zoom}'], df[f'chunk_y_{zoom}'])]
+            )
+        else:
+            df[f'chunk_id_{zoom}'] = da.asarray(
+                [f'{x}_{y}_{l}' for x, y, l in zip(df[f'chunk_x_{zoom}'], df[f'chunk_y_{zoom}', labels])]
+            )
 
-    #     # do prop idxs
-    #     tdf['prop_idx'] = tdf['feature_name'].map(prop_to_idx.get).astype(int)
+        # needs to speed up
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            chunks = df[f'chunk_id_{zoom}'].values.compute()
+            pool = np.unique(chunks)
+        # chunk_to_count = {chunk:0 for chunk in chunks}
+        # # entity_idxs = []
+        # for chunk in df[f'chunk_id_{zoom}']:
+        #     # entity_idxs.append(chunk_to_count[chunk])
+        #     chunk_to_count[chunk] += 1
+        entity_idxs = da.asarray(np.zeros((len(df),), dtype=np.int32))
+        for chunk in pool:
+            mask = chunks == chunk
+            n = np.count_nonzero(mask)
+            entity_idxs[mask] = np.random.permutation(n)
+        df[f'entity_idx_{zoom}'] = da.asarray(entity_idxs)
 
-    #     # do entity idx
-    #     chunks = da.unique(tdf['chunk'].values).compute()
-    #     prop_to_chunk_to_count = {g:{chunk:0 for chunk in chunks} for g in genes}
-    #     entity_idxs = []
-    #     for g, chunk in zip(tdf['feature_name'], tdf['chunk']):
-    #         entity_idxs.append(prop_to_chunk_to_count[g][chunk])
-    #         prop_to_chunk_to_count[g][chunk] += 1
-    #     tdf['entity_idx'] = da.asarray(entity_idxs)
+        # only to max count
+        df['keep'] = da.asarray(df[f'entity_idx_{zoom}'] < max_visible_features)
+        fdf = df.query('keep')
 
-    #     return self
+        chunk_x_max, chunk_y_max = fdf[[f'chunk_x_{zoom}', f'chunk_y_{zoom}']].max().compute()
+        idxs = fdf[[f'chunk_y_{zoom}', f'chunk_x_{zoom}', f'entity_idx_{zoom}']].values.compute()
 
-    # @model_validator(mode='after')
-    # def data_to_zarr(self) -> Self:
-    #     if len(self.data.shape) > 1:
-    #         raise ValueError(f'data must be 1D array. Got array with shape {self.data.shape}.')
-    #     # if not isinstance(self.data, zarr.Array):
-    #     #     self.data = to_zarr(self.data)
+        n_feats = fdf[['x', f'chunk_id_{zoom}']].groupby(
+            f'chunk_id_{zoom}').count()[['x']].max().compute().item()
 
-    #     return self
-
-    # @model_validator(mode='after')
-    # def convert_data_type(self) -> Self:
-    #     return convert_dtype(self, scale=self.force_scale)
-    
-    # def __del__(self):
-    #     if isinstance(self.data, zarr.Array):
-    #         delete_if_tmp(self.data)
-
-
-
-
-    # @model_validator(mode='after')
-    # def data_to_zarr(self) -> Self:
-    #     if not isinstance(self.data, zarr.Array):
-    #         self.data = to_zarr(self.data)
-
-    #     self.data.attrs['property_names'] = self.property_names
-
-    #     return self
-    
-    # @model_validator(mode='after')
-    # def convert_data_type(self) -> Self:
-    #     return convert_dtype(self, scale=self.force_scale, axis=0)
-
-    # def __del__(self):
-    #     if isinstance(self.data, zarr.Array):
-    #         delete_if_tmp(self.data)
-    
-# class LayerFeatures(BaseModel, validate_assignment=True, arbitrary_types_allowed=True):
-#     """
-#     Feature of a layer.
-#     """
-#     data: Annotated[zarr.Array, Field(
-#         description='Underlying data describing features.'
-#     )]
-#     # data: Annotated[Union[zarr.Array | da.core.Array | NDArray | GeoSeries | GeoDataFrame | FeatureCollection], Field(
-#     #     description="""
-#     #                 Underlying data describing features.
-
-#     #                 Can be either a numpy/Zarr/dask Array or GeoJSON FeatureCollection.
-
-#     #                 A GeoDataFrame is assumed to have a column "geometry" that holds shaply geometry objects
-#     #                 A GeoSeries is assumed to be a geoseries holding shaply geometry objects
-
-#     #                 A array can be the following shape based on feature geometry type:
-#     #                 + point - (n_features, 2)
-#     #                 + line - (n_features, 2, 2)
-#     #                 + polygon - (n_features, n_max_poly_coords, 2)
-#     #                 + multipoint - (n_features, n_max_objects, 2)
-#     #                 + multiline - (n_features, n_max_objects, 2, 2)
-#     #                 + multipolygon - (n_features, n_max_objects, n_max_poly_coords, 2)
-
-#     #                 n_features - number of features in layer
-#     #                 n_max_objects - maximum number of objects in a multi-geometry
-#     #                 n_max_poly_coords - maximum number of points describing polygon coordinates
-
-#     #                 Coordinates are stored as float32
-
-#     #                 ```python
-#     #                 array.attrs["feature_ids"] = feature_ids
-#     #                 ```
-                    
-#     #                 GeoJSON FeatureCollection should only be used for Layers with a small number of features (i.e. manually drawn annotations, etc.) or it is necessary to have multiple geometry types within the same layer (i.e. mixing points and polygons, etc.). GeoJSON files get large very quickly and should be avoided if a Zarr can be used.
-
-#     #                 """
-#     # )]
-#     feature_ids: Annotated[Union[List[Union[str | int]] | None], Field(
-#         description="Feature IDs. Must be unique across all features."
-#     )] = None
-#     geometry: Annotated[Union[FeatureGeometry | None], Field(
-#         description='Geometry type of feature contained in layer.'
-#     )] = None
-
-#     @model_validator(mode='after')
-#     def validate_features(self) -> Self:
-#         # if isinstance(self.data, FeatureCollection):
-#         #     n_features = len(self.data.features)
-#         #     assert self.feature_ids is not None, 'Must provide feature_ids if data is a FeatureCollection.'
-#         # if isinstance(self.data, GeoDataFrame) or isinstance(self.data, GeoSeries):
-#         #     n_features = self.data.shape[0]
-#         #     self.feature_ids = self.data.index.to_list()
-#         # else:
-#         n_features = self.data.shape[0]
-#         assert self.feature_ids is not None, 'Must provide feature_ids if data is an array.'
-
-
-#         if len(self.feature_ids) != n_features:
-#             raise ValueError(f'Length of `feature_ids` was {len(self.feature_ids)} and `data` was length {n_features}. Length of `feature_ids` and length of `data` must be equal.')
-#         if len(set(self.feature_ids)) != len(self.feature_ids):
-#             raise ValueError('Values in `feature_ids` or GeoSeries index must be unique.')
-
-#         return self
-    
-#     # @model_validator(mode='after')
-#     # def generate_zarr(self) -> Self:
-#     #     df = dask.dataframe.from_pandas(
-#     #         pd.DataFrame(index=np.arange(len(self.feature_ids))),
-#     #         npartitions=1
-#     #     )
-
-#     #     tdf['x_target_res'] = tdf['x'] / res
-#     #     tdf['y_target_res'] = tdf['y'] / res
-#     #     tdf['chunk_x'] = (tdf['x_target_res'] // tile_size).astype(int)
-#     #     tdf['chunk_y'] = (tdf['y_target_res'] // tile_size).astype(int)
-#     #     tdf['cp_id'] = da.asarray([f'{x}_{y}_{z}' for x, y, z in zip(tdf['chunk_x'], tdf['chunk_y'], tdf['codeword_index'])])
-#     #     tdf['chunk'] = da.asarray([f'{x}_{y}' for x, y in zip(tdf['chunk_x'], tdf['chunk_y'])])
-
-#     #     # do prop idxs
-#     #     tdf['prop_idx'] = tdf['feature_name'].map(prop_to_idx.get).astype(int)
-
-#     #     # do entity idx
-#     #     chunks = da.unique(tdf['chunk'].values).compute()
-#     #     prop_to_chunk_to_count = {g:{chunk:0 for chunk in chunks} for g in genes}
-#     #     entity_idxs = []
-#     #     for g, chunk in zip(tdf['feature_name'], tdf['chunk']):
-#     #         entity_idxs.append(prop_to_chunk_to_count[g][chunk])
-#     #         prop_to_chunk_to_count[g][chunk] += 1
-#     #     tdf['entity_idx'] = da.asarray(entity_idxs)
-
-#     #     return self
-
-#     @model_validator(mode='after')
-#     def validate_geometry(self) -> Self:
-        
-#         # TODO
-
-#         return self
-
+        group[zoom] = zarr.full(
+            (chunk_y_max + 1, chunk_x_max + 1, n_feats),
+            -1,
+            chunks=(1, 1, n_feats),
+            dtype=np.int32
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            group[zoom][
+                idxs[:, 0], idxs[:, 1], idxs[:, 2]] = np.arange(fdf.shape[0].compute())
 
 class Layer(BaseModel, validate_assignment=True, arbitrary_types_allowed=True):
     """
@@ -485,7 +414,7 @@ class Layer(BaseModel, validate_assignment=True, arbitrary_types_allowed=True):
             tmpfile.close()
         path = Path(self.zarr_filepath)
 
-        assert path.suffix == '.zip', f'zarr_filepath must have .zip extension, got {path}.'
+        # assert path.suffix == '.zip', f'zarr_filepath must have .zip extension, got {path}.'
 
         return self
 
@@ -525,54 +454,13 @@ class Layer(BaseModel, validate_assignment=True, arbitrary_types_allowed=True):
 
             # do indices for each zoom level
             print('Calculating visible features for each zoom level.')
-            df = dask.dataframe.from_pandas(
-                pd.DataFrame(index=np.arange(len(coords))),
-                npartitions=1
+            generate_feature_zarrs(
+                coords=coords,
+                n_zooms=n_zooms,
+                tile_size=tile_size,
+                max_visible_features=self.max_visible_features,
+                group=g['indices']
             )
-            if len(coords.shape) == 3:
-                df['x'], df['y'] = coords[:, 0, 0], coords[:, 1, 0]
-            else:
-                df['x'], df['y'] = coords[:, 0], coords[:, 1]
-            for zoom in range(n_zooms):
-                print(f'Starting zoom level {zoom}.')
-                df[f'chunk_x_{zoom}'] = (df['x'] / tile_size // (zoom + 1)).astype(int)
-                df[f'chunk_y_{zoom}'] = (df['y'] / tile_size // (zoom + 1)).astype(int)
-                df[f'chunk_id_{zoom}'] = da.asarray(
-                    [f'{x}_{y}' for x, y in zip(df[f'chunk_x_{zoom}'], df[f'chunk_y_{zoom}'])]
-                )
-
-                chunks = df[f'chunk_id_{zoom}'].values.compute()
-                pool = np.unique(chunks)
-                # chunk_to_count = {chunk:0 for chunk in chunks}
-                # # entity_idxs = []
-                # for chunk in df[f'chunk_id_{zoom}']:
-                #     # entity_idxs.append(chunk_to_count[chunk])
-                #     chunk_to_count[chunk] += 1
-                entity_idxs = da.asarray(np.zeros((len(df),), dtype=np.int32))
-                for chunk in pool:
-                    mask = chunks == chunk
-                    n = np.count_nonzero(mask)
-                    entity_idxs[mask] = np.random.permutation(n)
-                df[f'entity_idx_{zoom}'] = da.asarray(entity_idxs)
-
-                # only to max count
-                df['keep'] = da.asarray(df[f'entity_idx_{zoom}'] < self.max_visible_features)
-                fdf = df.query('keep')
-
-                chunk_x_max, chunk_y_max = fdf[[f'chunk_x_{zoom}', f'chunk_y_{zoom}']].max().compute()
-                idxs = fdf[[f'chunk_y_{zoom}', f'chunk_x_{zoom}', f'entity_idx_{zoom}']].values.compute()
-
-                n_feats = fdf[['x', f'chunk_id_{zoom}']].groupby(
-                    f'chunk_id_{zoom}').count()[['x']].max().compute().item()
-
-                g['indices'][zoom] = zarr.full(
-                    (chunk_y_max + 1, chunk_x_max + 1, n_feats),
-                    -1,
-                    chunks=(1, 1, n_feats),
-                    dtype=np.int32
-                )
-                g['indices'][zoom][
-                    idxs[:, 0], idxs[:, 1], idxs[:, 2]] = np.arange(fdf.shape[0].compute())
 
             self.layer_zarr = g
 
@@ -595,6 +483,26 @@ class Property(BaseModel, validate_assignment=True, arbitrary_types_allowed=True
     feature_ids: Annotated[Union[Iterable[Union[str | int]] | None], Field(
         description='Layer feature IDs properties correspond to. Must match order of rows in `data`.'
     )] = None
+    zarr_filepath: Annotated[Union[os.PathLike | None], Field(
+        description="Filepath used to store zarr group representing the property. If not provided a location will be created in systems temporary directory."
+    )] = None
+    layer_zarr: Annotated[Union[zarr.Group | None], Field(
+        description="""
+        Zarr group representing the property. Is automatically generated if not provided.
+
+        - attrs[type] (categorical or continuous)
+        - attrs[name] - name of property
+        - ids (int)
+
+        - label_to_indices (categorical only)
+        - - 0 (n_labels, y_chunks, x_chunks, max_visible_features)
+        - - 1 (n_labels, y_chunks, x_chunks, max_visible_features)
+        - - ... for every zoom
+
+        - labels (n_labels,), (categorical only)
+        - values (n_features), (continuous only)
+        """
+    )] = None
     view_settings: Annotated[Union[PropertyViewSettings | None], Field(
         description="View settings for a Layer property. If not provided, will be displayed with default view settings for Layer."
     )] = None
@@ -606,7 +514,7 @@ class Property(BaseModel, validate_assignment=True, arbitrary_types_allowed=True
     )] = None
 
     @model_validator(mode='after')
-    def process_feature_ids(self) -> Self:
+    def check_feature_ids(self) -> Self:
         if self.feature_ids is None:
             if any([
                 isinstance(self.data, pd.Series),
@@ -614,7 +522,9 @@ class Property(BaseModel, validate_assignment=True, arbitrary_types_allowed=True
                 ]):
                 self.feature_ids = self.data.index.to_list()
             else:
-                raise ValueError(f'feature_ids was not provided and data is of type {type(self.data)}. Unless data is a pd.Series, feature_ids must be provided.')
+                print('`feature_ids` not provided. Assuming same feature order as `layer`.')
+                self.feature_ids = self.layer.feature_ids
+                # raise ValueError(f'feature_ids was not provided and data is of type {type(self.data)}. Unless data is a pd.Series, feature_ids must be provided.')
 
         if len(set(self.feature_ids)) != len(self.feature_ids):
             raise ValueError('All feature ids must be unique.')
@@ -624,6 +534,15 @@ class Property(BaseModel, validate_assignment=True, arbitrary_types_allowed=True
 
         if not isinstance(self.feature_ids, list):
             self.feature_ids = list(self.feature_ids)
+        
+        assert self.feature_ids == self.layer.feature_ids, '`feature_ids` must match `layer.feature_ids`.'
+
+        return self
+    
+
+    @model_validator(mode='after')
+    def generate_zarr(self) -> Self:
+        
 
         return self
     
